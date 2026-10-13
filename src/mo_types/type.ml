@@ -406,6 +406,7 @@ let throwErrorCodes = List.sort compare_field [
 
 let call_error = obj Object [("err_code", Prim Nat32)]
 
+(* mirrored by `ErrorCode` (prim.mo) and `@ErrorCode` (internals.mo) *)
 let catchErrorCodes = List.sort compare_field (
   throwErrorCodes @ [
     { lab = "system_fatal"; typ = unit; src = empty_src};
