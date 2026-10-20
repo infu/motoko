@@ -9813,6 +9813,25 @@ module ComputePlugins = struct
 
       let get env = Arr.idx env ^^ load_ptr
 
+      let with_prefix env array_type array length body =
+        (match Type.normalize array_type with
+        | Type.Array _ -> ()
+        | _ -> fatal "compute plugin Arr.with_prefix requires an array");
+        let set_array, get_array = new_local env "plugin_prefix_array" in
+        let set_length, get_length = new_local env "plugin_prefix_length" in
+        let set_cursor, get_cursor = new_local env "plugin_prefix_cursor" in
+        array ^^ set_array ^^ length ^^ set_length ^^
+        get_array ^^ Tagged.load_forwarding_pointer env ^^ set_array ^^
+        get_length ^^ get_array ^^ Tagged.load_field env Arr.len_field ^^
+        compile_comparison I64Op.LeU ^^
+        E.else_trap_with env "Array index out of bounds" ^^
+        get_array ^^
+        compile_add_const Int64.(mul Arr.header_size Arr.element_size) ^^
+        set_cursor ^^
+        body (fun index ->
+          get_cursor ^^ index ^^ compile_mul_const Arr.element_size ^^
+          G.i (Binary (Wasm_exts.Values.I64 I64Op.Add)) ^^ load_ptr)
+
       let set env array_type value_type array index value =
         let element_type = match Type.normalize array_type with
           | Type.Array (Type.Mut typ) -> typ

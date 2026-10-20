@@ -91,6 +91,15 @@ module type Backend = sig
     val get : env -> G.t
     val len : env -> G.t
     val unsafe_idx : env -> G.t
+    (* Evaluate the array and unboxed prefix length once, left to right.
+       Check the complete logical prefix against the actual array length,
+       resolve forwarding once, and provide indexed managed-value loads.
+       This is a trusted native-plugin borrow: every requested index must be
+       below that prefix length, and neither body nor its callees may reach
+       a GC safepoint. Do not retain the loader/cursor outside body. Allocation
+       and memory.grow are allowed because they do not move Motoko objects. *)
+    val with_prefix : env -> Type.typ -> G.t -> G.t ->
+      ((G.t -> G.t) -> G.t) -> G.t
     val for_each : env -> G.t -> G.t -> (G.t -> G.t) -> G.t
     (* Length and index are unboxed i64. Initialize slots before calling the
        element generator, so an early error return cannot leave invalid heap
