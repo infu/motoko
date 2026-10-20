@@ -9,6 +9,7 @@ mod print;
 
 mod bigint;
 mod bitrel;
+mod blob_finalize;
 mod continuation_table;
 mod crc32;
 mod gc;
@@ -26,6 +27,7 @@ fn main() {
     unsafe {
         bigint::test();
         bitrel::test();
+        blob_finalize::test();
         continuation_table::test();
         crc32::test();
         gc::test();
@@ -53,6 +55,13 @@ pub extern "C" fn test_bitrel() {
     check_architecture();
     unsafe {
         bitrel::test();
+    }
+}
+#[unsafe(no_mangle)]
+pub extern "C" fn test_blob_finalize() {
+    check_architecture();
+    unsafe {
+        blob_finalize::test();
     }
 }
 #[unsafe(no_mangle)]

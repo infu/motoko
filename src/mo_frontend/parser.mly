@@ -234,6 +234,7 @@ and objblock eo s id ty dec_fields =
 %token PRIM
 %token UNDERSCORE
 %token COMPOSITE
+%token ICWIRE
 %token WEAK
 
 (* EXP_NO_JUXTA: the precedence of stopping a variant pattern at its bare tag.
@@ -408,11 +409,13 @@ seplist1(X, SEP) :
 %inline func_sort_opt :
   | (* empty *) { Type.Local @@ no_region }
   | SHARED qo=query? { Type.Shared (Lib.Option.get qo Type.Write) @@ at $sloc }
+  | SHARED ICWIRE qo=query? { Type.Shared (Type.icwire_shared_sort (Lib.Option.get qo Type.Write)) @@ at $sloc }
   | q=query { Type.Shared q @@ at $sloc }
 
 %inline shared_pat_opt :
   | (* empty *) { Type.Local @@ no_region }
   | SHARED qo=query? op=pat_opt { Type.Shared (Lib.Option.get qo Type.Write, op (at $sloc)) @@ at $sloc }
+  | SHARED ICWIRE qo=query? op=pat_opt { Type.Shared (Type.icwire_shared_sort (Lib.Option.get qo Type.Write), op (at $sloc)) @@ at $sloc }
   | q=query op=pat_opt { Type.Shared (q, op (at $sloc)) @@ at $sloc }
 
 

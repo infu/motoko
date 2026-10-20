@@ -1,0 +1,9 @@
+icwire-option-output.mo:3.38-3.39: type error [M0096], expression of type
+  shared icwire () -> async Null
+cannot produce expected type
+  shared icwire () -> async ?Nat
+because the type 
+  Null
+ is not compatible with type 
+  ?Nat
+ in results

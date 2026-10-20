@@ -1,0 +1,4 @@
+error[M0280]: Candid cannot describe an ICWire function or actor reference
+    ┌─ icwire-candid-encode-reference.mo:3:3
+  3 │    to_candid({ nested = ?[f] })
+    │    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^ 

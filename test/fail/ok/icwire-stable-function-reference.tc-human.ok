@@ -1,0 +1,5 @@
+error[M0131]: variable target is declared stable but has non-stable type
+  shared icwire () -> async Nat
+    ┌─ icwire-stable-function-reference.mo:3:7
+  3 │    let target : shared icwire () -> async Nat =
+    │        ^^^^^^ 

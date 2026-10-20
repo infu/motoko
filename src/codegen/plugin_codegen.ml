@@ -82,6 +82,8 @@ module type Backend = sig
     val len : env -> G.t
     val payload_ptr_unskewed : env -> G.t
     val of_ptr_size : env -> G.t
+    val alloc_unpublished : env -> G.t -> G.t
+    val finish : env -> G.t
   end
   module Arr : sig
     (* Consume a managed array and unboxed i64 index; bounds-checked element
@@ -143,6 +145,14 @@ module type Backend = sig
     (* Consume raw pointer and byte count. The caller validates <= 29 bytes. *)
     val of_ptr_size : env -> G.t
   end
+  module Actor : sig
+    val of_ptr_size : env -> G.t
+  end
+  module SharedFunc : sig
+    val principal : env -> G.t
+    val method_name : env -> G.t
+    val of_parts : env -> G.t
+  end
   module Float : sig
     val unbox : env -> G.t
     val box : env -> G.t
@@ -172,6 +182,8 @@ module type Backend = sig
        consumes raw pointer and size of validated (S)LEB bytes. *)
     val to_leb128 : env -> bool -> G.t
     val of_leb128 : env -> bool -> G.t
+    val leb128_size : env -> bool -> G.t
+    val write_leb128 : env -> bool -> G.t
   end
   module BigNumLibtommath : sig
     val fits_unsigned_bits : env -> int -> G.t

@@ -23,10 +23,30 @@ type obj_sort =
 
 type async_sort = Fut | Cmp
 type await_sort = AwaitFut of bool | AwaitCmp
+type wire_format = Candid | ICWire
 type shared_sort = Query | Write | Composite
+  | ICWireWrite | ICWireQuery | ICWireComposite
 type 'a shared = Local | Shared of 'a
 type func_sort = shared_sort shared
 type eff = Triv | Await
+
+let base_shared_sort = function
+  | Write | ICWireWrite -> Write
+  | Query | ICWireQuery -> Query
+  | Composite | ICWireComposite -> Composite
+
+let wire_of_sort = function
+  | Shared (ICWireWrite | ICWireQuery | ICWireComposite) -> ICWire
+  | Local | Shared (Write | Query | Composite) -> Candid
+
+let candid_sort = function
+  | Local -> Local
+  | Shared sort -> Shared (base_shared_sort sort)
+
+let icwire_shared_sort = function
+  | Write | ICWireWrite -> ICWireWrite
+  | Query | ICWireQuery -> ICWireQuery
+  | Composite | ICWireComposite -> ICWireComposite
 
 type prim =
   | Null
@@ -120,6 +140,9 @@ let tag_func_sort = function
   | Shared Write -> 1
   | Shared Query -> 2
   | Shared Composite -> 3
+  | Shared ICWireWrite -> 4
+  | Shared ICWireQuery -> 5
+  | Shared ICWireComposite -> 6
 
 let tag_obj_sort = function
   | Object -> 0
@@ -967,6 +990,23 @@ let serializable allow_mut t =
     end
   in go t
 
+(* Candid and persistence cannot describe an ICWire reference's protocol. *)
+let contains_icwire_reference typ =
+  let seen = ref S.empty in
+  let rec go typ =
+    if S.mem typ !seen then false else begin
+      seen := S.add typ !seen;
+      match normalize typ with
+      | Func (sort, _, _, inputs, outputs) ->
+        wire_of_sort sort = ICWire || List.exists go (inputs @ outputs)
+      | Obj (_, fields, _) | Variant fields ->
+        List.exists (fun field -> go field.typ) fields
+      | Tup types -> List.exists go types
+      | Array typ | Opt typ | Mut typ | Weak typ | Named (_, typ) -> go typ
+      | Con _ | Var _ | Prim _ | Any | Non | Pre | Async _ -> false
+    end
+  in go typ
+
 (* Find the first unshared subexpression in a type *)
 let find_unshared t =
   let seen = ref S.empty in
@@ -1019,7 +1059,7 @@ let is_local_async_func typ =
     false
 
 let shared t = serializable false t
-let stable t = serializable true t
+let stable t = serializable true t && not (contains_icwire_reference t)
 
 (* Forward declare
    TODO: haul string_of_typ before the lub/glb business, if possible *)
@@ -1308,6 +1348,8 @@ let rec rel_typ d rel eq t1 t2 =
     (c1 = c2 || incompatible_func_controls d c1 c2) &&
     (match rel_binds (RelArg.push Bounds d) eq eq tbs1 tbs2 with
      | Some ts ->
+        (* Positional ICWire has no runtime subtyping adaptation. *)
+        let rel = if wire_of_sort s1 = ICWire then eq else rel in
         rel_list "function parameters" (RelArg.push Domain d) rel_typ rel eq (List.map (open_ ts) t21) (List.map (open_ ts) t11) &&
         rel_list "return types" (RelArg.push CoDomain d) rel_typ rel eq (List.map (open_ ts) t12) (List.map (open_ ts) t22)
      | None -> incompatible_funcs d t1 t2
@@ -1658,6 +1700,7 @@ let rec combine rel lubs glbs t1 t2 =
       with Mismatch -> assert (rel == glbs); Non)
     | Func (s1, c1, bs1, ts11, ts12), Func (s2, c2, bs2, ts21, ts22) when
         s1 = s2 && c1 = c2 && eq_binds bs1 bs2 &&
+        wire_of_sort s1 = Candid &&
         List.(length ts11 = length ts21 && length ts12 = length ts22) ->
       let ts = open_binds bs1 in
       let cs = List.map (fun t -> fst (as_con t)) ts in
@@ -1836,7 +1879,7 @@ let decode_msg_typ tfs =
   Variant
     (List.sort compare_field (List.filter_map (fun tf ->
        match normalize tf.typ with
-       | Func(Shared (Write | Query), _, tbs, ts1, ts2) ->
+       | Func(Shared (Write | Query | ICWireWrite | ICWireQuery), _, tbs, ts1, ts2) ->
          Some { tf with
            typ =
              Func(Local, Returns, [], [],
@@ -1928,6 +1971,9 @@ let string_of_func_sort = function
   | Shared Write -> "shared "
   | Shared Query -> "shared query "
   | Shared Composite -> "shared composite query " (* TBR *)
+  | Shared ICWireWrite -> "shared icwire "
+  | Shared ICWireQuery -> "shared icwire query "
+  | Shared ICWireComposite -> "shared icwire composite query "
 
 (* PrettyPrinter configurations *)
 

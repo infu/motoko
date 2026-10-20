@@ -1,0 +1,4 @@
+error[M0280]: Candid cannot describe an ICWire function or actor reference
+    ┌─ icwire-candid-decode-reference.mo:3:3
+  3 │    from_candid(bytes)
+    │    ^^^^^^^^^^^^^^^^^^ 

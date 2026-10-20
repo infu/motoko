@@ -101,12 +101,14 @@ let primE prim es =
     | BinPrim (t, _) -> t
     | CastPrim (t1, t2) -> t2
     | RelPrim _ -> T.bool
+    | ICWireSerializePrim _
     | SerializePrim _ -> T.blob
     | ComputePrim (_, s) -> s.Mo_values.Compute_plugin.result_type
     | ComputeValuePrim id -> Mo_values.Compute_plugin.intrinsic_type id
     | SystemCyclesAvailablePrim
     | SystemCyclesAcceptPrim
     | SystemCyclesBurnPrim -> T.nat
+    | ICWireDeserializePrim ts
     | DeserializePrim ts -> T.seq ts
     | DeserializeOptPrim ts -> T.Opt (T.seq ts)
     | OtherPrim "trap" -> T.Non
@@ -191,11 +193,11 @@ let cps_awaitE s cont_typ e1 e2 =
     }
   | _ -> assert false
 
-let ic_replyE ts e =
+let ic_replyE wire ts e =
   (match ts with
   | [t] -> assert (T.sub (e.note.Note.typ) t)
   | _ -> assert (T.sub (T.Tup ts) (e.note.Note.typ)));
-  { it = PrimE (ICReplyPrim ts, [e]);
+  { it = PrimE (ICReplyPrim (wire, ts), [e]);
     at = no_region;
     note = Note.{ def with typ = T.unit; eff = eff e }
   }

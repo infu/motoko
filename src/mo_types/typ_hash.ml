@@ -45,6 +45,7 @@ a little reading advice:
  * Functions:
 
      shared (Int, Bool) -> Text = Fs(Ib)(t)
+     shared icwire (Int, Bool) -> Text = Fws(Ib)(t)
 
  * Types that occur more than once are prefixed with a number when seen first,
    and later referenced by that number:
@@ -127,7 +128,14 @@ let rec go = function
     List.iter (fun bind -> assert (bind.sort = Scope)) tbs;
     ( ( TwoSeq (List.length ts1),
         "F" ^
-        (match s with Local -> "" | Shared Query -> "q" | Shared Write -> "s" | Shared Composite -> "C") ^
+        (match s with
+         | Local -> ""
+         | Shared Query -> "q"
+         | Shared Write -> "s"
+         | Shared Composite -> "C"
+         | Shared ICWireWrite -> "ws"
+         | Shared ICWireQuery -> "wq"
+         | Shared ICWireComposite -> "wC") ^
         (match c with
          | Returns -> "" | Promises -> "p" | Replies -> "r"
          | Intrinsic id -> "i" ^ string_of_int (String.length id) ^ ":" ^ id)
@@ -195,3 +203,10 @@ let%test "polylist" =
   Cons.unsafe_set_kind con (Def ([bind], Opt (Tup [v; Con (con, [v])])));
   let t = Con (con, [nat]) in
   test t "0=?(N!0)"
+
+let%test "wire function hashes" =
+  List.for_all (fun (sort, expected) ->
+    test (Func (Shared sort, Promises, [], [nat], [text])) expected
+  ) [Write, "Fsp(N)(t)"; Query, "Fqp(N)(t)";
+     Composite, "FCp(N)(t)"; ICWireWrite, "Fwsp(N)(t)";
+     ICWireQuery, "Fwqp(N)(t)"; ICWireComposite, "FwCp(N)(t)"]

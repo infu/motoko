@@ -31,6 +31,9 @@ module Make (Cfg : Config) = struct
     | Shared Write -> "Shared"
     | Shared Query -> "Shared Query"
     | Shared Composite -> "Shared Composite"
+    | Shared ICWireWrite -> "Shared ICWire"
+    | Shared ICWireQuery -> "Shared ICWire Query"
+    | Shared ICWireComposite -> "Shared ICWire Composite"
 
   let prim = function
     | Null -> Atom "Null"

@@ -1,0 +1,1 @@
+icwire-candid-decode-reference.mo:3.3-3.21: type error [M0280], Candid cannot describe an ICWire function or actor reference

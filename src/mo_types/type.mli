@@ -12,10 +12,17 @@ type control = Returns | Promises | Replies | Intrinsic of string
 type obj_sort = Object | Actor | Mixin | Module | Memory
 type async_sort = Fut | Cmp
 type await_sort = AwaitFut of bool | AwaitCmp
+type wire_format = Candid | ICWire
 type shared_sort = Query | Write | Composite
+  | ICWireWrite | ICWireQuery | ICWireComposite
 type 'a shared = Local | Shared of 'a
 type func_sort = shared_sort shared
 type eff = Triv | Await
+
+val base_shared_sort : shared_sort -> shared_sort
+val wire_of_sort : func_sort -> wire_format
+val candid_sort : func_sort -> func_sort
+val icwire_shared_sort : shared_sort -> shared_sort
 
 type prim =
   | Null
@@ -230,6 +237,7 @@ type path = IdP of id | DotP of path * lab
 val compare_path : path -> path -> int
 val paths : path -> typ -> path ConEnv.t
 
+val contains_icwire_reference : typ -> bool
 val shared : typ -> bool
 val find_unshared : typ -> typ option
 

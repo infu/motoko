@@ -1,0 +1,12 @@
+error[M0096]: expression of type
+  shared icwire ?Int -> async ()
+cannot produce expected type
+  shared icwire ?Nat -> async ()
+because the type 
+  Nat
+ is not compatible with type 
+  Int
+ in arguments
+    ┌─ icwire-option-input.mo:3:38
+  3 │    (shared icwire ?Nat -> async ()) = f;
+    │                                       ^ 

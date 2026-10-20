@@ -1,0 +1,10 @@
+error[M0096]: expression of type
+  shared icwire {#a; #b : Nat} -> async ()
+cannot produce expected type
+  shared icwire {#b : Nat} -> async ()
+because expected case `#a` is missing from type 
+  {#b : Nat}
+ of arguments
+    ┌─ icwire-variant-input-width.mo:3:46
+  3 │    (shared icwire { #b : Nat } -> async ()) = f;
+    │                                               ^ 

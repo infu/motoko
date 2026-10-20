@@ -1,0 +1,6 @@
+icwire-protocol-to-candid.mo:3.31-3.32: type error [M0096], expression of type
+  shared icwire Nat -> async Nat
+cannot produce expected type
+  shared Nat -> async Nat
+because of incompatible function modifiers: shared icwire 
+ does not match shared 

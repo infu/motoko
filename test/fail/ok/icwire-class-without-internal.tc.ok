@@ -1,0 +1,1 @@
+icwire-class-without-internal.mo:2.1-2.14: type error [M0280], ICWire actor constructors require --icwire-internal

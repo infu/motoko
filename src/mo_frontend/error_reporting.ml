@@ -147,3 +147,4 @@ let terminal2token (type a) (symbol : a terminal) : token =
       | T_WRAPPOWASSIGN -> WRAPPOWASSIGN
       | T_PIPE -> PIPE
       | T_WEAK -> WEAK
+      | T_ICWIRE -> ICWIRE

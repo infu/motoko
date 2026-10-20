@@ -1,0 +1,9 @@
+error[M0280]: Candid cannot describe an ICWire function or actor reference
+    ┌─ icwire-candid-endpoint-reference.mo:3:25
+  2 │    actor {
+  3 │      public shared func bad(
+    │ ╭──────────────────────────^
+  4 │ │      value : { nested : ?[shared icwire () -> async Nat] }
+  5 │ │    ) : async () {};
+    │ ╰────^ 
+  6 │    };

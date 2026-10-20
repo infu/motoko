@@ -24,6 +24,9 @@ let warnings_are_errors = ref false
 let print_depth = ref 2
 let release_mode = ref false
 let compile_mode = ref ICMode
+(* Experimental ICWire actor transport, independent of ordinary shared calls. *)
+let icwire_internal = ref false
+let trap_on_candid = ref false
 let debug_info = ref false
 let await_lowering = ref true
 let async_lowering = ref true

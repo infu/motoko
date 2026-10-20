@@ -62,6 +62,47 @@ pub unsafe fn alloc_blob<M: Memory>(mem: &mut M, tag: Tag, size: Bytes<usize>) -
     ptr
 }
 
+/// Publish an exclusively owned, newly allocated byte blob at its initialized length.
+///
+/// The blob must not have passed the allocation barrier, been published, or crossed
+/// a GC safepoint. Its header still describes the entire allocation, and `size`
+/// bytes of its payload must have been initialized. The caller consumes the old
+/// blob and must use the returned value, which can point to a new allocation.
+///
+/// Normal allocations can be shortened in place: filler objects preserve their
+/// physical extent, including any allocations made after the blob. A large blob
+/// spans dedicated heap partitions whose extent is derived from its header. Keep
+/// that header intact and copy instead of making those partitions inconsistent.
+#[ic_mem_fn]
+pub unsafe fn finalize_blob<M: Memory>(mem: &mut M, value: Value, size: Bytes<usize>) -> Value {
+    use crate::{barriers::allocation_barrier, gc::incremental::partitioned_heap::PARTITION_SIZE};
+
+    let blob = value.as_blob_mut();
+    debug_assert_eq!((*blob).header.tag, TAG_BLOB_B);
+    let capacity = blob.len();
+    if size > capacity {
+        crate::rts_trap_with("finalize_blob: initialized length exceeds blob capacity");
+    }
+    if size == capacity {
+        return allocation_barrier(value);
+    }
+    let allocation_size = (size_of::<Blob>() + capacity.to_words())
+        .to_bytes()
+        .as_usize();
+    if allocation_size <= PARTITION_SIZE {
+        blob.shrink(size);
+        allocation_barrier(value)
+    } else {
+        let result = alloc_blob(mem, TAG_BLOB_B, size);
+        core::ptr::copy_nonoverlapping(
+            blob.payload_const(),
+            result.as_blob_mut().payload_addr(),
+            size.as_usize(),
+        );
+        allocation_barrier(result)
+    }
+}
+
 /// Allocate a new array.
 /// Note: After initialization, the post allocation barrier needs to be applied to all mutator objects.
 #[ic_mem_fn]

@@ -478,6 +478,124 @@ pub unsafe extern "C" fn bigint_leb128_size(a: Value) -> usize {
     }
 }
 
+// Compiler-plugin bridge. Keep the existing Candid routines independent: this
+// path accepts a complete, already validated LEB slice and borrows immutable
+// libtommath limbs while encoding. MP_64BIT uses 60 significant bits per digit.
+const PLUGIN_DIGIT_BITS: usize = 60;
+const PLUGIN_DIGIT_MASK: mp_digit = (1 << PLUGIN_DIGIT_BITS) - 1;
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn bigint_leb128_size_fast(n: Value, signed: u32) -> usize {
+    let value = n.as_bigint().mp_int_ptr();
+    let mut bits = mp_count_bits(value) as usize;
+    if signed != 0 {
+        // The sign bit requires one extra bit, except for a negative power of
+        // two. That exception affects byte length only on a 7-bit boundary.
+        let mut power_of_two = false;
+        if mp_isneg(value) && bits % 7 == 0 && bits != 0 {
+            let used = (*value).used as usize;
+            let top = *(*value).dp.add(used - 1);
+            power_of_two = top.is_power_of_two();
+            for index in 0..used - 1 {
+                power_of_two &= *(*value).dp.add(index) == 0;
+            }
+        }
+        bits += usize::from(!power_of_two);
+    }
+    core::cmp::max(1, (bits + 6) / 7)
+}
+
+/// Writes into caller-reserved space without allocating or mutating `n`.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn bigint_leb128_encode_fast(
+    n: Value,
+    output: *mut u8,
+    signed: u32,
+) -> usize {
+    let value = n.as_bigint().mp_int_ptr();
+    let negative = mp_isneg(value);
+    if negative && signed == 0 {
+        bigint_trap();
+    }
+    let length = bigint_leb128_size_fast(n, signed);
+    let used = (*value).used as usize;
+    let digits = (*value).dp;
+    let mut digit = 0;
+    let mut shift = 0;
+    let mut carry = u16::from(negative);
+    for index in 0..length {
+        let mut chunk = if digit < used {
+            *digits.add(digit) >> shift
+        } else {
+            0
+        };
+        if shift > PLUGIN_DIGIT_BITS - 7 && digit + 1 < used {
+            chunk |= *digits.add(digit + 1) << (PLUGIN_DIGIT_BITS - shift);
+        }
+        let mut byte = (chunk & 0x7f) as u8;
+        if negative {
+            let complement = u16::from(byte ^ 0x7f) + carry;
+            byte = (complement & 0x7f) as u8;
+            carry = complement >> 7;
+        }
+        *output.add(index) = byte | if index + 1 < length { 0x80 } else { 0 };
+        shift += 7;
+        if shift >= PLUGIN_DIGIT_BITS {
+            shift -= PLUGIN_DIGIT_BITS;
+            digit += 1;
+        }
+    }
+    length
+}
+
+/// The caller has validated a nonempty complete canonical (S)LEB slice. The
+/// result owns one exact-capacity bigint allocation; no arithmetic temporaries
+/// or references into the input survive this call.
+#[ic_mem_fn]
+pub unsafe fn bigint_leb128_decode_fast<M: Memory>(
+    mem: &mut M,
+    input: *const u8,
+    length: usize,
+    signed: u32,
+) -> Value {
+    if length == 0 || length > (i32::MAX as usize * PLUGIN_DIGIT_BITS - 59) / 7 {
+        bigint_trap();
+    }
+    let capacity = (length * 7 + PLUGIN_DIGIT_BITS - 1) / PLUGIN_DIGIT_BITS;
+    let digits = mp_calloc(mem, capacity, Bytes(core::mem::size_of::<mp_digit>())) as *mut mp_digit;
+    let negative = signed != 0 && *input.add(length - 1) & 0x40 != 0;
+    let mut carry = u16::from(negative);
+    let mut digit = 0;
+    let mut shift = 0;
+    for index in 0..length {
+        let mut chunk = u16::from(*input.add(index) & 0x7f);
+        if negative {
+            chunk = (chunk ^ 0x7f) + carry;
+            carry = chunk >> 7;
+            chunk &= 0x7f;
+        }
+        *digits.add(digit) |= ((chunk as mp_digit) << shift) & PLUGIN_DIGIT_MASK;
+        shift += 7;
+        if shift >= PLUGIN_DIGIT_BITS {
+            shift -= PLUGIN_DIGIT_BITS;
+            digit += 1;
+            if shift != 0 {
+                *digits.add(digit) = (chunk as mp_digit) >> (7 - shift);
+            }
+        }
+    }
+    let mut used = capacity;
+    while used != 0 && *digits.add(used - 1) == 0 {
+        used -= 1;
+    }
+    persist_bigint(mp_int {
+        used: used as i32,
+        alloc: capacity as i32,
+        sign: i32::from(negative && used != 0),
+        dp: digits,
+    })
+}
+
 // `add_bit` argument is to make this work for both leb and sleb encoding
 unsafe fn bigint_leb128_encode_go(tmp: *mut mp_int, mut buf: *mut u8, add_bit: bool) {
     if mp_isneg(tmp) {

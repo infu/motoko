@@ -1175,6 +1175,9 @@ module RTS = struct
     add_rts_import "bigint_sleb128_encode" [I64Type; I64Type] [];
     add_rts_import "bigint_sleb128_decode" [I64Type] [I64Type];
     add_rts_import "bigint_sleb128_decode_word64" [I64Type; I64Type; I64Type] [I64Type];
+    add_rts_import "bigint_leb128_size_fast" [I64Type; I32Type] [I64Type];
+    add_rts_import "bigint_leb128_encode_fast" [I64Type; I64Type; I32Type] [I64Type];
+    add_rts_import "bigint_leb128_decode_fast" [I64Type; I64Type; I32Type] [I64Type];
     add_rts_import "leb128_encode" [I64Type; I64Type] [];
     add_rts_import "sleb128_encode" [I64Type; I64Type] [];
     add_rts_import "utf8_valid" [I64Type; I64Type] [I32Type];
@@ -1254,6 +1257,7 @@ module RTS = struct
     add_rts_import "get_total_allocations" [] [I64Type];
     add_rts_import "get_heap_size" [] [I64Type];
     add_rts_import "alloc_blob" [I64Type; I64Type] [I64Type];
+    add_rts_import "finalize_blob" [I64Type; I64Type] [I64Type];
     add_rts_import "alloc_array" [I64Type; I64Type] [I64Type];
     add_rts_import "read_persistence_version" [] [I64Type];
     add_rts_import "stop_gc_before_stabilization" [] [];
@@ -5501,7 +5505,11 @@ module IC = struct
    )
 
   let static_nullary_reply env =
-    Blob.lit_ptr_len env Tagged.B "DIDL\x00\x00" ^^
+    (if !Flags.icwire_internal then
+      Blob.lit_ptr_len env Tagged.B ""
+    else if !Flags.trap_on_candid then
+      E.trap_with env "Candid serialization forbidden"
+    else Blob.lit_ptr_len env Tagged.B "DIDL\x00\x00") ^^
     reply_with_data env
 
   (* Actor reference on the stack *)
@@ -7262,7 +7270,7 @@ module Serialization = struct
     | Candid
     | Persistence
 
-  let to_idl_prim mode = let open Type in function
+  let to_idl_prim (mode : mode) = let open Type in function
     | Prim Null | Tup [] -> Some 1l
     | Prim Bool -> Some 2l
     | Prim Nat -> Some 3l
@@ -7305,7 +7313,7 @@ module Serialization = struct
 
 
   (* TODO: use record *)
-  let type_desc env mode ts :
+  let type_desc env (mode : mode) ts :
      string * int list * int32 list  (* type_desc, (relative offsets), indices of ts *)
     =
     let open Type in
@@ -7428,6 +7436,10 @@ module Serialization = struct
         ) (sort_by_hash vs)
       | Func (s, c, tbs, ts1, ts2) ->
         assert (Type.is_shared_sort s);
+        (* The frontend rejects ICWire references in Candid payloads and
+           persisted state. Never erase the protocol in a descriptor. *)
+        if Type.wire_of_sort s = Type.ICWire then
+          fatal "ICWire function reference has no Candid descriptor";
         add_sleb128 idl_func;
         add_leb128 (List.length ts1);
         List.iter add_idx ts1;
@@ -8692,6 +8704,8 @@ module Serialization = struct
     let name = Strm.name_for "serialize" ts in
     (* returns data/length pointers (will be GC’ed next time!) *)
     Func.share_code1 Func.Always env name ("x", I64Type) [I64Type; I64Type] (fun env get_x ->
+      (if !Flags.trap_on_candid then
+        E.trap_with env "Candid serialization forbidden" else G.nop) ^^
       let (set_data_size, get_data_size) = new_local env "data_size" in
       let (set_refs_size, get_refs_size) = new_local env "refs_size" in
 
@@ -8749,6 +8763,8 @@ module Serialization = struct
       then "@deserialize_extended<" ^ ts_name ^ ">"
       else "@deserialize<" ^ ts_name ^ ">" in
     Func.share_code2 Func.Always env name (("blob", I64Type), ("can_recover", I64Type)) (List.map (fun _ -> I64Type) ts) (fun env get_blob get_can_recover ->
+      (if !Flags.trap_on_candid && not extended then
+        E.trap_with env "Candid deserialization forbidden" else G.nop) ^^
       let (set_data_size, get_data_size) = new_local env "data_size" in
       let (set_refs_size, get_refs_size) = new_local env "refs_size" in
       let (set_data_start, get_data_start) = new_local env "data_start" in
@@ -9782,7 +9798,13 @@ module ComputePlugins = struct
           Mo_values.Compute_plugin.Prepared.check_type descriptor typ);
         code
     end
-    module Blob = Blob
+    module Blob = struct
+      include Blob
+      let alloc_unpublished env size =
+        compile_unboxed_const Tagged.(int_of_tag (Blob B)) ^^
+        size ^^ E.call_rts env "alloc_blob"
+      let finish env = E.call_rts env "finalize_blob"
+    end
     module Arr = struct
       include Arr
 
@@ -9918,6 +9940,29 @@ module ComputePlugins = struct
             get_ptr ^^ get_size ^^ Heap.memcpy env ^^
             get_value)
     end
+    module Actor = struct
+      let of_ptr_size env =
+        Func.share_code2 Func.Always env "plugin_actor_of_ptr_size"
+          (("ptr", I64Type), ("size", I64Type)) [I64Type]
+          (fun env get_ptr get_size ->
+            let set_value, get_value = new_local env "actor" in
+            get_size ^^ compile_unboxed_const 29L ^^
+            compile_comparison I64Op.LeU ^^
+            E.else_trap_with env "compute plugin actor principal is too long" ^^
+            Blob.alloc env Tagged.A get_size ^^ set_value ^^
+            get_value ^^ Blob.payload_ptr_unskewed env ^^
+            get_ptr ^^ get_size ^^ Heap.memcpy env ^^
+            get_value)
+    end
+    module SharedFunc = struct
+      let principal env = Arr.load_field env 0L
+      let method_name env = Arr.load_field env 1L
+      let of_parts env =
+        let set_method, get_method = new_local env "shared_method" in
+        let set_actor, get_actor = new_local env "shared_actor" in
+        set_method ^^ set_actor ^^
+        Arr.lit env Tagged.S [get_actor; get_method]
+    end
     module Float = Float
     module BoxedWord64 = BoxedWord64
     module TaggedSmallWord = TaggedSmallWord
@@ -9925,18 +9970,41 @@ module ComputePlugins = struct
     module BigNum = struct
       include BigNum
 
+      let leb128_size env signed =
+        let name = if signed then "plugin_sleb128_size"
+                   else "plugin_leb128_size" in
+        Func.share_code1 Func.Always env name ("value", I64Type) [I64Type]
+          (fun env get_value ->
+            get_value ^^ BitTagged.if_tagged_scalar env [I64Type]
+              (get_value ^^
+               (if signed then BigNum.compile_data_size_signed env
+                else BigNum.compile_data_size_unsigned env))
+              (get_value ^^ compile_const_32 (if signed then 1l else 0l) ^^
+               E.call_rts env "bigint_leb128_size_fast"))
+
+      let write_leb128 env signed =
+        let name = if signed then "plugin_sleb128_write"
+                   else "plugin_leb128_write" in
+        Func.share_code2 Func.Always env name
+          (("value", I64Type), ("ptr", I64Type)) [I64Type]
+          (fun env get_value get_ptr ->
+            get_value ^^ BitTagged.if_tagged_scalar env [I64Type]
+              (get_ptr ^^ get_value ^^
+               (if signed then BigNum.compile_store_to_data_buf_signed env
+                else BigNum.compile_store_to_data_buf_unsigned env))
+              (get_value ^^ get_ptr ^^
+               compile_const_32 (if signed then 1l else 0l) ^^
+               E.call_rts env "bigint_leb128_encode_fast"))
+
       let to_leb128 env signed =
         let name = if signed then "plugin_sleb128" else "plugin_leb128" in
         Func.share_code1 Func.Always env name ("value", I64Type) [I64Type]
           (fun env get_value ->
-            let size = if signed then BigNum.compile_data_size_signed
-                       else BigNum.compile_data_size_unsigned in
-            let write = if signed then BigNum.compile_store_to_data_buf_signed
-                        else BigNum.compile_store_to_data_buf_unsigned in
             let set_blob, get_blob = new_local env "integer_bytes" in
-            Blob.alloc env Tagged.B (get_value ^^ size env) ^^ set_blob ^^
-            get_blob ^^ Blob.payload_ptr_unskewed env ^^
-            get_value ^^ write env ^^ G.i Drop ^^
+            Blob.alloc env Tagged.B
+              (get_value ^^ leb128_size env signed) ^^ set_blob ^^
+            get_value ^^ get_blob ^^ Blob.payload_ptr_unskewed env ^^
+            write_leb128 env signed ^^ G.i Drop ^^
             get_blob)
 
       let of_leb128 env signed =
@@ -9945,10 +10013,16 @@ module ComputePlugins = struct
         Func.share_code2 Func.Always env name
           (("ptr", I64Type), ("size", I64Type)) [I64Type]
           (fun env get_ptr get_size ->
-            ReadBuf.alloc env (fun get_buf ->
-              ReadBuf.set_ptr get_buf get_ptr ^^
-              ReadBuf.set_size get_buf get_size ^^
-              BigNum.compile_load_from_data_buf env get_buf signed))
+            get_size ^^ compile_unboxed_const 8L ^^
+            compile_comparison I64Op.LeU ^^
+            E.if1 I64Type
+              (ReadBuf.alloc env (fun get_buf ->
+                 ReadBuf.set_ptr get_buf get_ptr ^^
+                 ReadBuf.set_size get_buf get_size ^^
+                 BigNum.compile_load_from_data_buf env get_buf signed))
+              (get_ptr ^^ get_size ^^
+               compile_const_32 (if signed then 1l else 0l) ^^
+               E.call_rts env "bigint_leb128_decode_fast"))
     end
     module BigNumLibtommath = BigNumLibtommath
     module Bool = Bool
@@ -10009,6 +10083,110 @@ module ComputePlugins = struct
     result
 end
 
+
+(* Actor transport uses the same registered, specialized codec as mo:fast.
+   Values are always the Motoko sequence type: zero arguments are (), a single
+   argument keeps its type, and multiple arguments form a tuple. No Candid
+   framing, type descriptors, or schema identifiers are added. *)
+module Wire = struct
+  let internal () =
+    if !Flags.icwire_internal then Type.ICWire else Type.Candid
+
+  let name = function Type.Candid -> "candid" | Type.ICWire -> "icwire"
+
+  let compute env id type_arguments argument_types arguments =
+    let module C = Mo_values.Compute_plugin in
+    let binding = match C.find id with
+      | Some binding -> binding
+      | None -> fatal "ICWire actor transport requires the icwire plugin"
+    in
+    let specialization =
+      match C.specialize binding type_arguments argument_types with
+      | Ok specialization -> specialization
+      | Error message -> fatal "ICWire actor transport: %s" message
+    in
+    let sr, code = ComputePlugins.compile env id specialization arguments in
+    code ^^ StackRep.adjust env sr SR.Vanilla
+
+  let unwrap env result =
+    result ^^ Variant.test_is env "ok" ^^
+    E.else_trap_with env "ICWire actor transport: invalid or oversized value" ^^
+    result ^^ Variant.project env
+
+  let plugin env id type_arguments argument_type =
+    let set_argument, get_argument = new_local env "wire_argument" in
+    let set_result, get_result = new_local env "wire_result" in
+    set_argument ^^
+    compute env id type_arguments [argument_type] [get_argument] ^^ set_result ^^
+    unwrap env get_result
+
+  (* A transient capacity hint per concrete schema avoids a sizing traversal
+     on successful calls. A miss measures once and retries the bounded writer;
+     no exact-encoder fallback is used. The hint is a Wasm scalar global, not
+     persisted state or a wire descriptor. Query changes roll back normally. *)
+  let encode_blob env ts =
+    let typ = Type.seq ts in
+    let schema = Typ_hash.typ_hash typ in
+    let max_bytes = 16_777_216L in
+    Func.share_code1 Func.Always env ("@icwire_api_bounded<" ^ schema ^ ">")
+      ("value", I64Type) [I64Type] (fun env value ->
+        let hint = E.get_global64_lazy env
+          ("@icwire_capacity<" ^ schema ^ ">") Mutable 256L in
+        let set_capacity, capacity = new_local env "wire_capacity" in
+        let set_result, result = new_local env "wire_bounded_result" in
+        let set_size, size = new_local env "wire_measured_size" in
+        let set_blob, blob = new_local env "wire_blob" in
+        let bounded () =
+          compute env "icwire_encode_bounded" [] [typ; Type.nat]
+            [value; capacity ^^ BigNum.from_word64 env] ^^ set_result in
+        let finish =
+          unwrap env result ^^ set_blob ^^
+          (* A rare large value must not retain a large capacity indefinitely.
+             Halving below one-quarter utilization adds hysteresis; a future
+             larger value can always grow again through the checked miss path. *)
+          blob ^^ Blob.len env ^^ capacity ^^ compile_shrU_const 2L ^^
+          compile_comparison I64Op.LtU ^^
+          E.if1 I64Type
+            (capacity ^^ compile_unboxed_const 16L ^^
+             compile_comparison I64Op.GtU ^^
+             E.if1 I64Type (capacity ^^ compile_shrU_const 1L) capacity)
+            capacity ^^
+          G.i (GlobalSet (nr hint)) ^^ blob in
+        G.i (GlobalGet (nr hint)) ^^ set_capacity ^^ bounded () ^^
+        result ^^ Variant.test_is env "ok" ^^
+        E.if1 I64Type finish
+          (compute env "icwire_estimate_size" [] [typ] [value] ^^
+           BigNum.to_word64 env ^^ set_size ^^
+           size ^^ compile_unboxed_const max_bytes ^^
+           compile_comparison I64Op.LeU ^^
+           size ^^ capacity ^^ compile_comparison I64Op.GtU ^^
+           G.i (Binary (Wasm_exts.Values.I64 I64Op.And)) ^^
+           E.if1 I64Type
+             (* Since size > capacity >= 16, this shift is in [5, 24]. *)
+             (compile_unboxed_one ^^ compile_unboxed_const 64L ^^
+              size ^^ compile_add_const (-1L) ^^
+              G.i (Unary (Wasm_exts.Values.I64 I64Op.Clz)) ^^
+              G.i (Binary (Wasm_exts.Values.I64 I64Op.Sub)) ^^
+              G.i (Binary (Wasm_exts.Values.I64 I64Op.Shl)) ^^
+              set_capacity ^^ bounded () ^^ finish)
+             (unwrap env result)))
+
+  let serialize env wire ts = match wire with
+    | Type.Candid -> Serialization.serialize env ts
+    | Type.ICWire -> encode_blob env ts ^^ Blob.as_ptr_len env
+
+  (* Consume a Blob, and leave each argument in its own vanilla stack slot. *)
+  let deserialize_from_blob env wire ts = match wire with
+    | Type.Candid ->
+      Bool.lit false ^^ Serialization.deserialize_from_blob false env ts
+    | Type.ICWire ->
+      plugin env "icwire_decode" [Type.seq ts] Type.blob ^^
+      StackRep.adjust env SR.Vanilla (StackRep.of_arity (List.length ts))
+
+  let deserialize env wire ts =
+    IC.arg_data env ^^ deserialize_from_blob env wire ts
+end
+
 module FuncDec = struct
   let bind_args env ae0 first_arg args =
     let rec go i ae = function
@@ -10041,16 +10219,16 @@ module FuncDec = struct
     ))
 
   let message_start env sort = match sort with
-      | Type.(Shared Write) ->
+      | Type.(Shared (Write | ICWireWrite)) ->
         Lifecycle.(trans env InUpdate)
-      | Type.(Shared Query) ->
+      | Type.(Shared (Query | ICWireQuery)) ->
         Lifecycle.(trans env InQuery)
-      | Type.(Shared Composite) ->
+      | Type.(Shared (Composite | ICWireComposite)) ->
         Lifecycle.(trans env InComposite)
       | _ -> assert false
 
   let message_cleanup env sort = match sort with
-      | Type.(Shared Write) ->
+      | Type.(Shared (Write | ICWireWrite)) ->
         Lifecycle.get env ^^
         compile_eq_const (Lifecycle.(int_of_state InStabilization)) ^^
         Lifecycle.get env ^^
@@ -10062,9 +10240,9 @@ module FuncDec = struct
             GC.collect_garbage env ^^
             Lifecycle.(trans env Idle)
           end
-      | Type.Shared Type.Query ->
+      | Type.(Shared (Query | ICWireQuery)) ->
         Lifecycle.(trans env PostQuery)
-      | Type.Shared Type.Composite ->
+      | Type.(Shared (Composite | ICWireComposite)) ->
         (* Stay in composite query state such that callbacks of
         composite queries can also use the memory reserve.
         The state is isolated since memory changes of queries
@@ -10085,6 +10263,7 @@ module FuncDec = struct
       (message_cleanup env (Type.Shared Type.Write))
 
   let compile_const_message outer_env outer_ae sort control args mk_body ret_tys at : E.func_with_names =
+    let wire = Type.wire_of_sort sort in
     let ae0 = VarEnv.mk_fun_ae outer_ae in
     Func.of_body outer_env [] [] (fun env -> G.with_region at (
       message_start env sort ^^
@@ -10095,7 +10274,7 @@ module FuncDec = struct
       (if control = Type.Returns
        then
          Tuple.compile_unit env ^^
-         Serialization.serialize env [] ^^
+         Wire.serialize env wire [] ^^
          IC.reply_with_data env
        else G.nop) ^^
       (* Deserialize argument and add params to the environment *)
@@ -10103,7 +10282,7 @@ module FuncDec = struct
       let arg_names = List.map (fun a -> a.it) args in
       let arg_tys = List.map (fun a -> a.note) args in
       let ae1 = VarEnv.add_argument_locals env ae0 arg_list in
-      Serialization.deserialize env arg_tys ^^
+      Wire.deserialize env wire arg_tys ^^
       G.concat_map (Var.set_val_vanilla_from_stack env ae1) (List.rev arg_names) ^^
       mk_body env ae1 ^^
       message_cleanup env sort
@@ -10232,13 +10411,14 @@ module FuncDec = struct
      deserialization); the reject callback function is unique.
   *)
 
-  let closures_to_reply_reject_callbacks_aux env ts_opt =
+  let closures_to_reply_reject_callbacks_aux env wire ts_opt =
     let arity, reply_name, from_arg_data =
       match ts_opt with
       | Some ts ->
         (List.length ts,
-         "@callback<" ^ Typ_hash.typ_hash (Type.Tup ts) ^ ">",
-         fun env -> Serialization.deserialize env ts)
+         "@callback_" ^ Wire.name wire ^ "<" ^
+           Typ_hash.typ_hash (Type.Tup ts) ^ ">",
+         fun env -> Wire.deserialize env wire ts)
       | None ->
         (1,
          "@callback",
@@ -10306,10 +10486,10 @@ module FuncDec = struct
       compile_unboxed_const (Wasm.I64_convert.extend_i32_u (E.add_fun_ptr env (E.built_in env reject_name))) ^^
       get_cb_index
 
-  let closures_to_reply_reject_callbacks env ts =
-    closures_to_reply_reject_callbacks_aux env (Some ts)
-  let closures_to_raw_reply_reject_callbacks env  =
-    closures_to_reply_reject_callbacks_aux env None
+  let closures_to_reply_reject_callbacks env wire ts =
+    closures_to_reply_reject_callbacks_aux env wire (Some ts)
+  let closures_to_raw_reply_reject_callbacks env =
+    closures_to_reply_reject_callbacks_aux env Type.Candid None
 
   let ignoring_callback env =
     (* for one-way calls, we use an invalid table entry as the callback. this
@@ -10377,13 +10557,13 @@ module FuncDec = struct
     | _ ->
       E.trap_with env (Printf.sprintf "cannot perform %s when running locally" purpose)
 
-  let ic_call env ts1 ts2 get_meth_pair get_arg get_k get_r get_c =
+  let ic_call env wire ts1 ts2 get_meth_pair get_arg get_k get_r get_c =
     ic_call_threaded
       env
       "remote call"
       get_meth_pair
-      (closures_to_reply_reject_callbacks env ts2 [get_k; get_r; get_c])
-      (fun _ -> get_arg ^^ Serialization.serialize env ts1)
+      (closures_to_reply_reject_callbacks env wire ts2 [get_k; get_r; get_c])
+      (fun _ -> get_arg ^^ Wire.serialize env wire ts1)
 
   let ic_call_raw env get_meth_pair get_arg get_k get_r get_c =
     ic_call_threaded
@@ -10394,18 +10574,20 @@ module FuncDec = struct
       (fun _ -> get_arg ^^ Blob.as_ptr_len env)
 
   let ic_self_call env ts get_meth_pair get_future get_k get_r get_c =
+    let wire = Wire.internal () in
     ic_call_threaded
       env
       "self call"
       get_meth_pair
       (* Storing the tuple away, future_array_index = 3, keep in sync with rts/continuation_table.rs *)
-      (closures_to_reply_reject_callbacks env ts [get_k; get_r; get_c; get_future])
+      (closures_to_reply_reject_callbacks env wire ts
+        [get_k; get_r; get_c; get_future])
       (fun get_cb_index ->
         get_cb_index ^^
         TaggedSmallWord.msb_adjust Type.Nat32 ^^
-        Serialization.serialize env Type.[nat32])
+        Wire.serialize env wire Type.[nat32])
 
-  let ic_call_one_shot env ts get_meth_pair get_arg add_cycles =
+  let ic_call_one_shot env wire ts get_meth_pair get_arg add_cycles =
     match E.mode env with
     | Flags.ICMode ->
       (* The callee *)
@@ -10420,7 +10602,7 @@ module FuncDec = struct
       compile_unboxed_const 0L ^^
       IC.system_call env "call_new" ^^
       (* the data *)
-      get_arg ^^ Serialization.serialize env ts ^^
+      get_arg ^^ Wire.serialize env wire ts ^^
       IC.system_call env "call_data_append" ^^
       (* the cycles *)
       add_cycles ^^
@@ -10463,7 +10645,7 @@ module FuncDec = struct
         IC.assert_caller_self env ^^
 
         (* Deserialize and look up continuation argument *)
-        Serialization.deserialize env Type.[nat32] ^^
+        Wire.deserialize env (Wire.internal ()) Type.[nat32] ^^
         TaggedSmallWord.lsb_adjust Type.Nat32 ^^
         ContinuationTable.peek_future env ^^
         set_closure ^^
@@ -12026,7 +12208,8 @@ and compile_prim_invocation (env : E.t) ae p es at =
          set_meth_pair ^^
          compile_exp_vanilla env ae e2 ^^ set_arg ^^
 
-         FuncDec.ic_call_one_shot env ts get_meth_pair get_arg add_cycles
+         FuncDec.ic_call_one_shot env (Type.wire_of_sort sort) ts
+           get_meth_pair get_arg add_cycles
     end
 
   (* Operators *)
@@ -12360,11 +12543,21 @@ and compile_prim_invocation (env : E.t) ae p es at =
     Serialization.serialize env ts ^^
     Blob.of_ptr_size env
 
+  | ICWireSerializePrim ts, [e] ->
+    SR.Vanilla,
+    compile_exp_vanilla env ae e ^^
+    Wire.encode_blob env ts
+
   | DeserializePrim ts, [e] ->
     StackRep.of_arity (List.length ts),
     compile_exp_vanilla env ae e ^^
     Bool.lit false ^^ (* can't recover *)
     Serialization.deserialize_from_blob false env ts
+
+  | ICWireDeserializePrim ts, [e] ->
+    StackRep.of_arity (List.length ts),
+    compile_exp_vanilla env ae e ^^
+    Wire.deserialize_from_blob env Type.ICWire ts
 
   | DeserializeOptPrim ts, [e] ->
     SR.Vanilla,
@@ -13208,13 +13401,13 @@ and compile_prim_invocation (env : E.t) ae p es at =
   | ICArgDataPrim, [] ->
     SR.Vanilla, IC.arg_data env
 
-  | ICReplyPrim ts, [e] ->
+  | ICReplyPrim (wire, ts), [e] ->
     SR.unit, begin match E.mode env with
     | Flags.ICMode ->
       compile_exp_vanilla env ae e ^^
       (* TODO: We can try to avoid the boxing and pass the arguments to
         serialize individually *)
-      Serialization.serialize env ts ^^
+      Wire.serialize env wire ts ^^
       IC.reply_with_data env
     | _ ->
       E.trap_with env "cannot reply when running locally"
@@ -13229,7 +13422,7 @@ and compile_prim_invocation (env : E.t) ae p es at =
   | ICCallPrim, [f;e;k;r;c] ->
     SR.unit, begin
     (* TBR: Can we do better than using the notes? *)
-    let _, _, _, ts1, _ = Type.as_func f.note.Note.typ in
+    let sort, _, _, ts1, _ = Type.as_func f.note.Note.typ in
     let _, _, _, ts2, _ = Type.as_func k.note.Note.typ in
     let (set_meth_pair, get_meth_pair) = new_local env "meth_pair" in
     let (set_arg, get_arg) = new_local env "arg" in
@@ -13242,7 +13435,8 @@ and compile_prim_invocation (env : E.t) ae p es at =
     compile_exp_vanilla env ae k ^^ set_k ^^
     compile_exp_vanilla env ae r ^^ set_r ^^
     compile_exp_vanilla env ae c ^^ set_c ^^
-    FuncDec.ic_call env ts1 ts2 get_meth_pair get_arg get_k get_r get_c add_cycles
+    FuncDec.ic_call env (Type.wire_of_sort sort) ts1 ts2
+      get_meth_pair get_arg get_k get_r get_c add_cycles
     end
 
   | ICCallRawPrim, [p;m;a;k;r;c] ->
@@ -14115,9 +14309,10 @@ and export_actor_field env  ae (f : Ir.field) =
         match normalize f.note with
         |  Func(Shared sort,_,_,_,_) ->
            (match sort with
-            | Write -> "canister_update " ^ f.it.name
-            | Query -> "canister_query " ^ f.it.name
-            | Composite -> "canister_composite_query " ^ f.it.name
+            | Write | ICWireWrite -> "canister_update " ^ f.it.name
+            | Query | ICWireQuery -> "canister_query " ^ f.it.name
+            | Composite | ICWireComposite ->
+              "canister_composite_query " ^ f.it.name
            )
         | _ -> assert false)
       | _ -> assert false);
@@ -14134,7 +14329,9 @@ and main_actor as_opt mod_env ds fs up =
   mod_env.E.stable_types := metadata "motoko:stable-types" up.meta.sig_;
   mod_env.E.stable_types_text := Some up.meta.sig_;
   mod_env.E.service := metadata "candid:service" up.meta.candid.service;
-  mod_env.E.args := metadata "candid:args" up.meta.candid.args;
+  mod_env.E.args :=
+    if !Flags.icwire_internal then None
+    else metadata "candid:args" up.meta.candid.args;
 
   Func.define_built_in mod_env IC.initialize_main_actor_function_name [] [] (fun env ->
     let ae0 = VarEnv.empty_ae in
@@ -14222,13 +14419,11 @@ and main_actor as_opt mod_env ds fs up =
           begin
             (* Only validate the message payload. *)
             Persistence.get_init_message_payload env ^^
-            Bool.lit false ^^ (* cannot recover *)
-            Serialization.deserialize_from_blob false env arg_tys
+            Wire.deserialize_from_blob env (Wire.internal ()) arg_tys
           end
       | Some (_ :: _) ->
         Persistence.get_init_message_payload env ^^
-        Bool.lit false ^^ (* cannot recover *)
-        Serialization.deserialize_from_blob false env arg_tys ^^
+        Wire.deserialize_from_blob env (Wire.internal ()) arg_tys ^^
         G.concat_map (Var.set_val_vanilla_from_stack env ae1) (List.rev arg_names)
     end ^^
     begin

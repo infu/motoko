@@ -231,7 +231,7 @@ let rec check_typ env typ : unit =
       List.iter (fun t -> check_shared env no_region t) ts1;
       match control with
       | T.Returns ->
-        check env no_region (sort = T.Shared T.Write)
+        check env no_region (T.candid_sort sort = T.Shared T.Write)
           "one-shot query function pointless";
         if not (ts2 = []) then
           error env no_region "one-shot function cannot have non-unit return types:\n  %s"
@@ -595,10 +595,12 @@ let rec check_exp env (exp:Ir.exp) : unit =
       check (Show.can_show ot) "show is not defined for operand type";
       typ exp1 <: ot;
       T.text <: t
+    | ICWireSerializePrim ots, [exp1]
     | SerializePrim ots, [exp1] ->
       check (T.shared (T.seq ots)) "Serialize is not defined for operand type";
       typ exp1 <: T.seq ots;
       T.blob <: t
+    | ICWireDeserializePrim ots, [exp1]
     | DeserializePrim ots, [exp1] ->
       check (T.shared (T.seq ots)) "Deserialize is not defined for operand type";
       typ exp1 <: T.blob;
@@ -640,7 +642,7 @@ let rec check_exp env (exp:Ir.exp) : unit =
       check_typ env t;
     | ICArgDataPrim, [] ->
       T.blob <: t
-    | ICReplyPrim ts, [exp1] ->
+    | ICReplyPrim (_, ts), [exp1] ->
       check (not (env.flavor.has_async_typ)) "ICReplyPrim in async flavor";
       check (T.shared t) "ICReplyPrim is not defined for non-shared operand type";
       (* TODO: check against expected reply typ; note this may not be env.ret_tys. *)

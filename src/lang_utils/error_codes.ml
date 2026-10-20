@@ -229,6 +229,7 @@ let error_codes : (string * string option) list =
     "M0275", Some([%blob "lang_utils/error_codes/M0275.md"]); (* Unparenthesized head requires braced branches/body *)
     "M0277", Some([%blob "lang_utils/error_codes/M0277.md"]); (* Function body spells out the implicit `async` *)
     "M0279", Some([%blob "lang_utils/error_codes/M0279.md"]); (* Invalid compute plugin call or declaration *)
+    "M0280", Some([%blob "lang_utils/error_codes/M0280.md"]); (* Invalid ICWire endpoint schema or protocol *)
   ]
 
 (** Message codes that can be both used as warnings and errors *)

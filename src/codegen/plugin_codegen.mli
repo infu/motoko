@@ -91,6 +91,12 @@ module type Backend = sig
     val len : env -> G.t
     val payload_ptr_unskewed : env -> G.t
     val of_ptr_size : env -> G.t
+    (* Allocate a private construction buffer without its allocation barrier.
+       No safepoint or publication may occur before exactly one [finish].
+       [finish] consumes the buffer and an unboxed byte length, validates the
+       capacity, and returns an immutable Blob containing that prefix. *)
+    val alloc_unpublished : env -> G.t -> G.t
+    val finish : env -> G.t
   end
   module Arr : sig
     (* Consume a managed array and unboxed i64 index; bounds-checked element
@@ -154,6 +160,19 @@ module type Backend = sig
     (* Consume raw pointer and byte count. The caller validates <= 29 bytes. *)
     val of_ptr_size : env -> G.t
   end
+  module Actor : sig
+    (* Consume validated principal bytes and construct an actor reference. *)
+    val of_ptr_size : env -> G.t
+  end
+  module SharedFunc : sig
+    (* Project the actor or method Text from a shared function reference.
+       Protocol and signature are static types, never runtime fields. *)
+    val principal : env -> G.t
+    val method_name : env -> G.t
+    (* Consume actor then method Text, constructing the compiler's ordinary
+       shared function representation with its allocation barrier. *)
+    val of_parts : env -> G.t
+  end
   module Float : sig
     val unbox : env -> G.t
     val box : env -> G.t
@@ -183,6 +202,11 @@ module type Backend = sig
        consumes raw pointer and size of validated (S)LEB bytes. *)
     val to_leb128 : env -> bool -> G.t
     val of_leb128 : env -> bool -> G.t
+    (* Non-allocating (S)LEB sizing and writing. [write_leb128] consumes a
+       vanilla integer followed by a raw pointer to sufficient reserved
+       space, and returns the unboxed byte count written. *)
+    val leb128_size : env -> bool -> G.t
+    val write_leb128 : env -> bool -> G.t
   end
   module BigNumLibtommath : sig
     val fits_unsigned_bits : env -> int -> G.t

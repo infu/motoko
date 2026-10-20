@@ -75,7 +75,10 @@ let plain_of_func_sort : Buffer.t -> Syntax.func_sort -> unit =
     | Local -> ()
     | Shared Composite -> bprintf buf "shared composite query "
     | Shared Query -> bprintf buf "shared query "
-    | Shared Write -> bprintf buf "shared ")
+    | Shared Write -> bprintf buf "shared "
+    | Shared ICWireWrite -> bprintf buf "shared icwire "
+    | Shared ICWireQuery -> bprintf buf "shared icwire query "
+    | Shared ICWireComposite -> bprintf buf "shared icwire composite query ")
 
 let plain_of_obj_sort_title : Buffer.t -> 'note Syntax.sort -> unit =
  fun buf sort ->

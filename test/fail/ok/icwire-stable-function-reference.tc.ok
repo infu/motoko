@@ -1,0 +1,2 @@
+icwire-stable-function-reference.mo:3.7-3.13: type error [M0131], variable target is declared stable but has non-stable type
+  shared icwire () -> async Nat

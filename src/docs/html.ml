@@ -83,7 +83,10 @@ let html_of_func_sort : Syntax.func_sort -> t =
     | Local -> empty
     | Shared Composite -> keyword "shared composite query "
     | Shared Query -> keyword "shared query "
-    | Shared Write -> keyword "shared ")
+    | Shared Write -> keyword "shared "
+    | Shared ICWireWrite -> keyword "shared icwire "
+    | Shared ICWireQuery -> keyword "shared icwire query "
+    | Shared ICWireComposite -> keyword "shared icwire composite query ")
 
 let html_of_obj_sort : 'note Syntax.sort -> t =
  fun sort ->

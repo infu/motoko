@@ -432,6 +432,30 @@ and interpret_exp_mut env exp (k : V.value V.cont) =
       | OtherPrim s, vs ->
         let arg = match vs with [v] -> v | _ -> V.Tup vs in
         Prim.prim { Prim.trap = trap exp.at "%s" } s (context env) arg k
+      | ICWireSerializePrim ts, [value] ->
+        (match Compute_plugin.find "icwire_encode" with
+         | None -> trap exp.at "ICWire encoder plugin is unavailable"
+         | Some binding ->
+           match Compute_plugin.specialize binding [] [T.seq ts] with
+           | Error message -> trap exp.at "%s" message
+           | Ok specialization ->
+             Compute_plugin.evaluate (context env) binding.Compute_plugin.id
+               specialization [value] (function
+               | Ok (V.Variant ("ok", value)) -> k value
+               | Ok _ -> trap exp.at "invalid ICWire message"
+               | Error message -> trap exp.at "%s" message))
+      | ICWireDeserializePrim ts, [value] ->
+        (match Compute_plugin.find "icwire_decode" with
+         | None -> trap exp.at "ICWire decoder plugin is unavailable"
+         | Some binding ->
+           match Compute_plugin.specialize binding [T.seq ts] [T.blob] with
+           | Error message -> trap exp.at "%s" message
+           | Ok specialization ->
+             Compute_plugin.evaluate (context env) binding.Compute_plugin.id specialization
+               [value] (function
+               | Ok (V.Variant ("ok", value)) -> k value
+               | Ok _ -> trap exp.at "invalid ICWire message"
+               | Error message -> trap exp.at "%s" message))
       | ComputeValuePrim _, [] -> k V.unit
       | ComputePrim (id, s), [v] ->
         let vs = match s.Compute_plugin.argument_types with
@@ -469,7 +493,7 @@ and interpret_exp_mut env exp (k : V.value V.cont) =
       | NumConvWrapPrim (t1, t2), vs ->
         let arg = match vs with [v] -> v | _ -> V.Tup vs in
         k (Prim.num_conv_wrap_prim { Prim.trap = trap exp.at "%s" } t1 t2 arg)
-      | ICReplyPrim ts, [v1] ->
+      | ICReplyPrim (_, ts), [v1] ->
         assert (not env.flavor.has_async_typ);
         let reply = Option.get env.replies in
         Scheduler.queue (fun () -> reply v1)

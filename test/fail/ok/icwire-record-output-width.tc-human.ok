@@ -1,0 +1,10 @@
+error[M0096]: expression of type
+  shared icwire () -> async {a : Nat; b : Bool}
+cannot produce expected type
+  shared icwire () -> async {a : Nat}
+because field `b` is missing from expected type 
+  {a : Nat}
+ of results
+    ┌─ icwire-record-output-width.mo:3:45
+  3 │    (shared icwire () -> async { a : Nat }) = f;
+    │                                              ^ 

@@ -1,0 +1,12 @@
+error[M0096]: expression of type
+  shared icwire ((Nat, Text)) -> async ()
+cannot produce expected type
+  shared icwire (Nat, Text) -> async ()
+because the type 
+  Nat
+ is not compatible with type 
+  (Nat, Text)
+ in arguments
+    ┌─ icwire-argument-arity.mo:3:45
+  3 │    (shared icwire (Nat, Text) -> async ()) = f;
+    │                                              ^ 

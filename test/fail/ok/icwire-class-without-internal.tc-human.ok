@@ -1,0 +1,4 @@
+error[M0280]: ICWire actor constructors require --icwire-internal
+    ┌─ icwire-class-without-internal.mo:2:1
+  2 │  shared icwire actor class Api(seed : Nat) {
+    │  ^^^^^^^^^^^^^ 

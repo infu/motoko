@@ -41,6 +41,7 @@ let repr_of_symbol : xsymbol -> (string * string) =
   let entry_point s = (s, "") in
   function
   | X (T T_error) -> simple_token "error"
+  | X (T T_ICWIRE) -> simple_token "icwire"
   | X (T T_XOROP) -> unop "^"
   | X (T T_XORASSIGN) -> unassign "^="
   | X (T T_WHILE) -> simple_token "while"

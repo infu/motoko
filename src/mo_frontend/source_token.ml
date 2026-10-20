@@ -127,6 +127,7 @@ type token =
   | UNDERSCORE
   | WEAK
   | COMPOSITE
+  | ICWIRE
   (* Trivia *)
   | LINEFEED of line_feed
   | SINGLESPACE
@@ -260,6 +261,7 @@ let to_parser_token :
   | PRIM -> Ok Parser.PRIM
   | UNDERSCORE -> Ok Parser.UNDERSCORE
   | COMPOSITE -> Ok Parser.COMPOSITE
+  | ICWIRE -> Ok Parser.ICWIRE
   | PIPE -> Ok Parser.PIPE
   | WEAK -> Ok Parser.WEAK
   (*Trivia *)
@@ -405,6 +407,7 @@ let string_of_parser_token = function
   | Parser.PRIM -> "PRIM"
   | Parser.UNDERSCORE -> "UNDERSCORE"
   | Parser.COMPOSITE -> "COMPOSITE"
+  | Parser.ICWIRE -> "ICWIRE"
   | Parser.PIPE -> "PIPE"
   | Parser.WEAK -> "WEAK"
   | Parser.NULLCOALESCE -> "NULLCOALESCE"

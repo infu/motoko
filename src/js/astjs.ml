@@ -86,7 +86,10 @@ module Make (Cfg : Config) = struct
     | Local -> "Local"
     | Shared Write -> "Shared"
     | Shared Query -> "Shared Query"
-    | Shared Composite -> "Shared Composite")
+    | Shared Composite -> "Shared Composite"
+    | Shared ICWireWrite -> "Shared ICWire"
+    | Shared ICWireQuery -> "Shared ICWire Query"
+    | Shared ICWireComposite -> "Shared ICWire Composite")
     |> js_string
 
   let control_js c =
@@ -608,6 +611,10 @@ module Make (Cfg : Config) = struct
     | Shared (Write, p) -> to_js_object "Shared" [| pat_js p |]
     | Shared (Query, p) -> to_js_object "Query" [| pat_js p |]
     | Shared (Composite, p) -> to_js_object "Composite" [| pat_js p |]
+    | Shared (ICWireWrite, p) -> to_js_object "ICWireShared" [| pat_js p |]
+    | Shared (ICWireQuery, p) -> to_js_object "ICWireQuery" [| pat_js p |]
+    | Shared (ICWireComposite, p) ->
+      to_js_object "ICWireComposite" [| pat_js p |]
 
   and vis_js v =
     let open Syntax in

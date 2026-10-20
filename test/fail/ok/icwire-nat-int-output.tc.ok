@@ -1,0 +1,9 @@
+icwire-nat-int-output.mo:3.37-3.38: type error [M0096], expression of type
+  shared icwire () -> async Nat
+cannot produce expected type
+  shared icwire () -> async Int
+because the type 
+  Nat
+ is not compatible with type 
+  Int
+ in results

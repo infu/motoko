@@ -1,0 +1,17 @@
+error[M0081]: this if has type
+  Any
+because branches have inconsistent types,
+true produces
+  shared icwire Nat -> async Nat
+false produces
+  shared Nat -> async Nat
+    ┌─ icwire-protocol-lub.mo:6:16
+  6 │    let merged = if (flag) wire else candid;
+    │                 ^^^^^^^^^^^^^^^^^^^^^^^^^^ 
+error[M0096]: expression of type
+  Any
+cannot produce expected type
+  shared icwire Nat -> async Nat
+    ┌─ icwire-protocol-lub.mo:7:3
+  7 │    merged
+    │    ^^^^^^ 

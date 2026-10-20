@@ -150,7 +150,7 @@ module MakeState() = struct
     | Obj (Mixin, _, _) -> assert false
     | Variant fs ->
        I.VariantT (fields fs)
-    | Func (Shared s, c, tbs, ts1, ts2) ->
+    | Func (Shared ((Write | Query | Composite) as s), c, tbs, ts1, ts2) ->
        let nons = List.map (fun _ -> Non) tbs in
        let ts1, ts2 =
          (List.map (open_ nons) ts1,
@@ -163,12 +163,15 @@ module MakeState() = struct
            (match s with
             | Query -> [I.Query @@ no_region]
             | Composite -> [I.Composite @@ no_region]
-            | Write -> []),
+            | Write -> []
+            | ICWireWrite | ICWireQuery | ICWireComposite -> assert false),
            t1, args ts)
        | _ -> assert false)
     | Named (n, t) ->
       (* drop name, Candid only allows names on function argument and return types *)
       (typ t).it
+    (* ICWire methods are omitted by [meths]. ICWire references cannot
+       occur in Candid payloads after type checking. *)
     | Func _
     | Async _
     | Mut _
@@ -203,10 +206,13 @@ module MakeState() = struct
       I.{name = None; typ = typ t} @@ no_region
   and meths fs =
     List.fold_right (fun f list ->
-      let meth =
-        I.{var = Idllib.Escape.unescape_method f.lab @@ no_region;
-           meth = typ f.typ} @@ f.src.region in
-      meth :: list) fs []
+      match normalize f.typ with
+      | Func (sort, _, _, _, _) when wire_of_sort sort = ICWire -> list
+      | _ ->
+        let meth =
+          I.{var = Idllib.Escape.unescape_method f.lab @@ no_region;
+             meth = typ f.typ} @@ f.src.region in
+        meth :: list) fs []
 
   let is_actor_con c =
     match Cons.kind c with
@@ -250,11 +256,12 @@ module MakeState() = struct
     | ActorClassU (_, _, _, _, _, _, _, _, dfs) ->
        (match normalize cub.note.note_typ with
         | Func (Local, Returns, [tb], ts1, [t2]) ->
-          let args = List.map arg_typ (List.map (open_ [Non]) ts1) in
           let (_, _, actor_typ) = as_async (normalize (open_ [Non] t2)) in
           mixin_trivia := gather_mixin_trivia [] dfs;
           let actor = typ actor_typ in
-          Some (I.ClassT (args, actor) @@ cub.at)
+          if !Mo_config.Flags.icwire_internal then Some actor else
+            let args = List.map arg_typ (List.map (open_ [Non]) ts1) in
+            Some (I.ClassT (args, actor) @@ cub.at)
         | _ -> assert false
        )
 end
@@ -277,7 +284,8 @@ let of_actor_type t : I.prog =
 
 let of_service_type ts t : I.arg_typ list * I.prog =
   let open MakeState() in
-  let args = List.map arg_typ ts  in
+  let args = if !Mo_config.Flags.icwire_internal then []
+    else List.map arg_typ ts in
   let actor = Some (typ t) in
   let decs = gather_decs () in
   let prog = I.{decs; actor} in

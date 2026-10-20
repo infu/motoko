@@ -49,7 +49,7 @@ pub unsafe fn test() {
 
     let one = bigint_of_word64(1);
     let two = bigint_of_word64(2);
-    for i in 0..100 {
+    for i in (0..100).chain((100..=420).filter(|i| i % 7 <= 1 || i % 60 <= 1)) {
         let two_pow_i = bigint_pow(two, bigint_of_word64(i));
         let minus_one = bigint_sub(two_pow_i, one);
         let plus_one = bigint_add(two_pow_i, one);
@@ -64,6 +64,13 @@ pub unsafe fn test() {
         test_bigint_sleb128(bigint_neg(minus_one));
         test_bigint_sleb128(bigint_neg(two_pow_i));
         test_bigint_sleb128(bigint_neg(plus_one));
+
+        // Several nonzero limbs exercise carry transitions that powers of two
+        // alone miss. The independent, existing codec is the byte oracle.
+        let mixed = bigint_add(two_pow_i, bigint_of_word64(0x1234_5678_9abc_def0));
+        test_bigint_leb128(mixed);
+        test_bigint_sleb128(mixed);
+        test_bigint_sleb128(bigint_neg(mixed));
     }
 
     set_bigint_heap(std::ptr::null_mut());
@@ -83,6 +90,7 @@ unsafe fn test_bigint_leb128(n: Value) {
     let n2 = bigint_leb128_decode(&mut buf_ as *mut _);
     assert!(bigint_eq(n, n2));
     assert_eq!(buf_.ptr.offset_from(buf.as_ptr()), s as isize);
+    test_fast_leb128(n, false, &buf[..s]);
 }
 
 // Check sleb128 encode/decode roundtrip
@@ -97,4 +105,34 @@ unsafe fn test_bigint_sleb128(n: Value) {
     let n2 = bigint_sleb128_decode(&mut buf_ as *mut _);
     assert!(bigint_eq(n, n2));
     assert_eq!(buf_.ptr.offset_from(buf.as_ptr()), s as isize);
+    test_fast_leb128(n, true, &buf[..s]);
+}
+
+unsafe fn test_fast_leb128(n: Value, signed: bool, expected: &[u8]) {
+    let before = (*HEAP).heap_pointer();
+    let mut bytes = [0xa5; 102];
+    assert_eq!(
+        bigint_leb128_size_fast(n, u32::from(signed)),
+        expected.len()
+    );
+    let length = bigint_leb128_encode_fast(n, bytes.as_mut_ptr().add(1), u32::from(signed));
+    assert_eq!(length, expected.len());
+    assert_eq!(&bytes[1..1 + length], expected);
+    assert_eq!(bytes[0], 0xa5);
+    assert_eq!(bytes[length + 1], 0xa5);
+    assert_eq!(
+        (*HEAP).heap_pointer(),
+        before,
+        "sizing/writing must not allocate"
+    );
+
+    let decoded =
+        bigint_leb128_decode_fast(&mut *HEAP, expected.as_ptr(), length, u32::from(signed));
+    assert!(bigint_eq(n, decoded));
+    let capacity = (length * 7 + 59) / 60;
+    let allocated = (*HEAP).heap_pointer() - before;
+    assert_eq!(
+        allocated,
+        core::mem::size_of::<motoko_rts::types::BigInt>() + capacity * 8
+    );
 }

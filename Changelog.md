@@ -4,6 +4,12 @@
 
 * motoko (`moc`)
 
+  * Experimental branch only: name this compiler **Tripwire**, available as
+    `bin/tripwire`, and add explicit `shared icwire` actor endpoints,
+    exact-schema function types, mixed Candid/ICWire calls, ICWire constructor
+    and compiler-private messages via `--icwire-internal`, and the runtime
+    `--trap-on-candid` audit. These changes live in the separate actor API
+    experiment and are not part of its base compute-plugin PR (#6443).
   * Add experimental native compute compiler plugins via `--plugin`, with
     typed specialization, statically linked Wasm, and interpreter reference
     implementations and compatibility diagnostics. Support explicit output

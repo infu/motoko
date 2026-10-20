@@ -169,6 +169,8 @@ let ensureNamed e f =
 (* The actual transformation *)
 
 let transform prog =
+  let internal_wire =
+    if !Mo_config.Flags.icwire_internal then T.ICWire else T.Candid in
 
   (* the state *)
   let con_renaming = ref ConRenaming.empty
@@ -275,7 +277,7 @@ let transform prog =
                      (* try await async (); schedule() catch e -> r(e) *)
                      let v = fresh_var "call" unit in
                      letE v
-                       (selfcallE [] (ic_replyE [] (unitE())) (varE schedule) (projE (varE vkrb) 1)
+                       (selfcallE [] (ic_replyE internal_wire [] (unitE())) (varE schedule) (projE (varE vkrb) 1)
                           ([] -->* (projE (varE vkrb) 2 -*- unitE ())))
                        (check_call_perform_status (varE v) (fun e -> projE (varE vkrb) 1 -*- e))))
               ]
@@ -302,7 +304,7 @@ let transform prog =
           letP (tupP [varP nary_async; varP nary_reply; varP reject; varP clean]) def;
           let ic_reply = (* flatten v, here and below? *)
             let v = fresh_var "v" (T.seq ts1) in
-            v --> ic_replyE ts1 (varE v) in
+            v --> ic_replyE internal_wire ts1 (varE v) in
           let ic_reject =
             let e = fresh_var "e" catch in
             e --> ic_rejectE (errorMessageE (varE e)) in
@@ -409,7 +411,7 @@ let transform prog =
                 | t -> assert false in
               let k =
                 let v = fresh_var "v" t1 in
-                v --> ic_replyE ret_tys (varE v) in
+                v --> ic_replyE (T.wire_of_sort s) ret_tys (varE v) in
               let r =
                 let e = fresh_var "e" catch in
                 e --> ic_rejectE (errorMessageE (varE e)) in

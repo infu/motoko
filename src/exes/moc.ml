@@ -4,8 +4,8 @@ open Source
 
 open Printf
 
-let name = "moc"
-let banner = "Motoko compiler " ^ Source_id.banner
+let name = "tripwire"
+let banner = "Tripwire compiler " ^ Source_id.banner
 let usage = "Usage: " ^ name ^ " [option] [file]\n       " ^ name ^ " [option] --check [file ...]"
 
 (* Argument handling *)
@@ -18,7 +18,7 @@ let add_arg source = args := !args @ [source]
 
 let set_mode m () =
   if !mode <> Default && !mode <> m then
-    fail "moc: multiple execution modes specified";
+    fail "tripwire: multiple execution modes specified";
   mode := m
 
 let out_file = ref ""
@@ -37,7 +37,7 @@ let valid_metadata_names =
 let load_compute_plugin path =
   let unsupported message =
     fail "unsupported compute plugin %S: %s\n\
-      Use a plugin built for this compiler (moc %s; OCaml %s) \
+      Use a plugin built for this compiler (Tripwire %s; OCaml %s) \
       and host platform."
       path message Source_id.banner Sys.ocaml_version
   in
@@ -67,6 +67,10 @@ let load_compute_plugin path =
 let argspec =
   Args.ai_args
   @ [
+  "--icwire-internal", Arg.Set Flags.icwire_internal,
+    " use ICWire for constructor arguments and compiler-private messages";
+  "--trap-on-candid", Arg.Set Flags.trap_on_candid,
+    " trap if application Candid serialization or deserialization executes";
   "--plugin", Arg.String load_compute_plugin,
     "<directory|cmxs>  load a trusted native compute compiler plugin";
   "-c", Arg.Unit (set_mode Compile), " compile a program to WebAssembly";
@@ -232,7 +236,7 @@ let exit_on_none = function
 let single_file what files =
   match files with
   | [file] -> file
-  | _ -> fail "moc: %s expects exactly one source file" what
+  | _ -> fail "tripwire: %s expects exactly one source file" what
 
 let process_files files : unit =
   match !mode with
@@ -252,7 +256,7 @@ let process_files files : unit =
     exit_on_none (Pipeline.run_file_and_stdin file_opt)
   | Check ->
     if List.length files > 1 && (Option.is_some !Flags.enhanced_migration || Option.is_some !Flags.stable_baseline) then
-      fail "moc: --enhanced-migration and --stable-baseline expect a single file to check";
+      fail "tripwire: --enhanced-migration and --stable-baseline expect a single file to check";
     Diag.run (Pipeline.check_files files)
   | StableCompatible ->
     begin
@@ -324,7 +328,7 @@ let process_metadata_names kind =
     (fun s ->
       if not (List.mem s valid_metadata_names) then
         begin
-          eprintf "moc: --%s-metadata argument %s must be one of %s"
+          eprintf "tripwire: --%s-metadata argument %s must be one of %s"
             kind
             s
             (String.concat ", " valid_metadata_names);
@@ -342,11 +346,11 @@ let () =
   Flags.compiled := !mode = Compile;
 
   if !Flags.warnings_are_errors && (not !Flags.print_warnings)
-  then fail "moc: --hide-warnings and -Werror together do not make sense";
+  then fail "tripwire: --hide-warnings and -Werror together do not make sense";
 
   if Option.is_some !Flags.stable_baseline && Option.is_none !Flags.enhanced_migration
   then begin
-    eprintf "moc: --stable-baseline requires --enhanced-migration\n"; exit 1
+    eprintf "tripwire: --stable-baseline requires --enhanced-migration\n"; exit 1
   end;
 
   process_metadata_names "public" !Flags.public_metadata_names;
@@ -357,7 +361,7 @@ let () =
   | Linking.LinkModule.LinkError msg
   | Linking.LinkModule.TooLargeDataSegments msg
   | Codegen.Compile_common.CodegenError msg ->
-    eprintf "moc: %s\n" msg;
+    eprintf "tripwire: %s\n" msg;
     exit 1
   | Sys_error msg ->
     (* IO error *)

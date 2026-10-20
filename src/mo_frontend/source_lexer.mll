@@ -249,6 +249,7 @@ rule token mode = parse
   | "query" { QUERY }
   | "return" { RETURN }
   | "shared" { SHARED }
+  | "icwire" { ICWIRE }
   | "stable" { STABLE }
   | "switch" { SWITCH }
   | "system" { SYSTEM }

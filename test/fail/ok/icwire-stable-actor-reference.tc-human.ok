@@ -1,0 +1,5 @@
+error[M0131]: variable target is declared stable but has non-stable type
+  actor {f : shared icwire () -> async Nat}
+    ┌─ icwire-stable-actor-reference.mo:3:7
+  3 │    let target : actor { f : shared icwire () -> async Nat } = actor "aaaaa-aa";
+    │        ^^^^^^ 

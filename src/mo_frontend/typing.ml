@@ -728,6 +728,22 @@ let error_shared env t at code fmt =
     in
     Format.kasprintf env (fun s1 -> Diag.add_msg env.msgs (type_error at code (s1^s) [] [] []); raise Recover) fmt
 
+let check_message_schema env at wire typ =
+  if not env.pre then
+    match wire with
+    | T.Candid ->
+      if T.contains_icwire_reference typ then
+        error env at "M0280"
+          "Candid cannot describe an ICWire function or actor reference"
+    | T.ICWire ->
+      (match Compute_plugin.find "icwire_encode" with
+       | None -> error env at "M0280"
+           "ICWire endpoints require the icwire compute plugin"
+       | Some binding ->
+         match Compute_plugin.specialize binding [] [typ] with
+         | Ok _ -> ()
+         | Error message -> error env at "M0280" "%s" message)
+
 let as_domT t =
   match t.it with
   | TupT tis -> tis
@@ -749,7 +765,7 @@ let check_shared_binds env at tbs =
       "shared function has unexpected type parameters"
 
 let check_shared_return env at sort c ts =
-  match sort, c, ts with
+  match T.candid_sort sort, c, ts with
   | T.Shared _, T.Promises,  _ -> ()
   | T.Shared T.Write, T.Returns, [] -> ()
   | T.Shared T.Write, _, _ -> error env at "M0035" "shared function must have syntactic return type '()' or 'async <typ>'"
@@ -793,7 +809,7 @@ let scope_info env typ at =
 
 let infer_async_cap env sort cs tbs body_opt at =
   let open T in
-  match sort, cs, tbs with
+  match T.candid_sort sort, cs, tbs with
   | Shared Write, c::_,  { T.sort = Scope; _ }::_ ->
     { env with typs = Env.add default_scope_var c env.typs;
                scopes = ConEnv.add c at env.scopes;
@@ -1001,6 +1017,8 @@ and check_typ' env typ : T.typ =
     if not env.pre && Type.is_shared_sort sort.it then begin
       check_shared_binds env typ.at tbs;
       let t1 = T.seq ts1 in
+      check_message_schema env typ1.at (T.wire_of_sort sort.it) t1;
+      check_message_schema env typ2.at (T.wire_of_sort sort.it) (T.seq ts2);
       if not (T.shared t1) then
         error_shared env t1 typ1.at "M0031" "shared function has non-shared parameter type%a"
           display_typ_expand t1;
@@ -1011,7 +1029,7 @@ and check_typ' env typ : T.typ =
             display_typ_expand t;
       ) ts2;
       match c, ts2 with
-      | T.Returns, [] when sort.it = T.Shared T.Write -> ()
+      | T.Returns, [] when T.candid_sort sort.it = T.Shared T.Write -> ()
       | T.Promises, _ -> ()
       | _ ->
         error env typ2.at "M0041"
@@ -1232,17 +1250,17 @@ and infer_inst env sort tbs typs t_ret at =
               "`system` capability required, but not available\n (need an enclosing async expression or function body or explicit `system` type parameter)";
           (T.Con(C.bogus_cap, [])::ts, at::ats)
        end
-     | C.(AwaitCap c | AsyncCap c) when T.(sort = Shared Query || sort = Shared Write || sort = Local) ->
+     | C.(AwaitCap c | AsyncCap c) when T.(candid_sort sort = Shared Query || candid_sort sort = Shared Write || sort = Local) ->
         (T.Con(c, [])::ts, at::ats)
-     | C.(AwaitCap c | AsyncCap c) when sort = T.(Shared Composite) ->
+     | C.(AwaitCap c | AsyncCap c) when T.candid_sort sort = T.(Shared Composite) ->
         error env at "M0186"
          "composite send capability required, but not available\n  (cannot call a `composite query` function from a non-`composite query` function)"
      | C.(CompositeAwaitCap c | CompositeCap c) ->
        begin
          match sort with
-         | T.(Shared (Composite | Query)) ->
+         | T.(Shared (Composite | Query | ICWireComposite | ICWireQuery)) ->
            (T.Con(c, [])::ts, at::ats)
-         | T.(Shared Write) ->
+         | T.(Shared (Write | ICWireWrite)) ->
            error env at "M0187"
              "send capability required, but not available\n  (cannot call a `shared` function from a `composite query` function; only calls to `query` and `composite query` functions are allowed)"
          | T.Local ->
@@ -2582,6 +2600,7 @@ and infer_exp'' env exp : T.typ =
   | ToCandidE exps ->
     if not env.pre then begin
         let ts = List.map (infer_exp env) exps in
+        check_message_schema env exp.at T.Candid (T.seq ts);
         if not (T.shared (T.seq ts)) then
           error env exp.at "M0175" "to_candid argument must have shared type, but instead has non-shared type%a"
             display_typ_expand (T.seq ts);
@@ -2744,6 +2763,8 @@ and infer_exp'' env exp : T.typ =
 
       if Type.is_shared_sort sort then begin
         check_shared_binds env exp.at tbs;
+        check_message_schema env pat.at (T.wire_of_sort sort) t1;
+        check_message_schema env typ.at (T.wire_of_sort sort) (T.seq ts2);
         if not (T.shared t1) then
           error_shared env t1 pat.at "M0031"
             "shared function has non-shared parameter type%a"
@@ -2755,7 +2776,7 @@ and infer_exp'' env exp : T.typ =
               display_typ_expand t;
         ) ts2;
         match c, ts2 with
-        | T.Returns, [] when sort = T.Shared T.Write -> ()
+        | T.Returns, [] when T.candid_sort sort = T.Shared T.Write -> ()
         | T.Promises, _ -> ()
         | _ ->
           error env typ.at "M0041" "shared function has non-async result type%a"
@@ -3144,6 +3165,7 @@ and check_exp' env0 t exp : T.typ =
   | ToCandidE exps, _ ->
     if not env.pre then begin
       let ts = List.map (infer_exp env) exps in
+      check_message_schema env exp.at T.Candid (T.seq ts);
       if not (sub env exp.at (T.Prim T.Blob) t) then
         error env exp.at "M0172" "to_candid produces a Blob that is not a subtype of%a"
           display_typ_expand t;
@@ -3153,6 +3175,7 @@ and check_exp' env0 t exp : T.typ =
       end;
     T.Prim T.Blob
   | FromCandidE exp1, t when T.shared t && T.is_opt t ->
+    check_message_schema env exp.at T.Candid t;
     check_exp env (T.Prim T.Blob) exp1;
     t
   | FromCandidE _, t ->
@@ -4215,8 +4238,11 @@ and check_class_shared_pat env shared_pat obj_sort : Scope.val_env =
       error env pat.at "M0107" "non-actor class cannot take a context pattern";
     if pat.it <> WildP then
       error_in Flags.[WASIMode] env pat.at "M0108" "actor class cannot take a context pattern";
-    if mode = T.Query then
+    if T.base_shared_sort mode <> T.Write then
       error env shared_pat.at "M0109" "class cannot be a query";
+    if T.wire_of_sort (T.Shared mode) = T.ICWire && not !Flags.icwire_internal then
+      error env shared_pat.at "M0280"
+        "ICWire actor constructors require --icwire-internal";
     env.shared_pat_regions := pat.at :: !(env.shared_pat_regions);
     check_pat_exhaustive local_error env T.ctxt pat
   | _, T.Memory -> assert false
@@ -5328,6 +5354,8 @@ and infer_dec env dec : T.typ =
       let t_pat, ve =
         infer_pat_exhaustive (if in_actor then error else warn) env' pat
       in
+      if in_actor then check_message_schema env pat.at
+        (if !Flags.icwire_internal then T.ICWire else T.Candid) t_pat;
       if in_actor && not (T.shared t_pat) then
         error_shared env t_pat pat.at "M0034"
           "shared constructor has non-shared parameter type%a"

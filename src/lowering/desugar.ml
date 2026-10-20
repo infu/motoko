@@ -561,7 +561,12 @@ and call_system_func_opt name es obj_typ =
                   | T.Func(T.Local, _, [], [], ts) ->
                     tagE tf.T.lab
                       T.(funcE ("$"^tf.lab) Local Returns [] [] ts
-                        (primE (Ir.DeserializePrim ts) [varE arg]))
+                        (let source = List.find (fun source -> source.T.lab = tf.lab) tfs in
+                         let sort, _, _, _, _ = T.as_func (T.normalize source.T.typ) in
+                         let decoder = match T.wire_of_sort sort with
+                           | T.Candid -> Ir.DeserializePrim ts
+                           | T.ICWire -> Ir.ICWireDeserializePrim ts
+                         in primE decoder [varE arg]))
                   | _ -> assert false))
                 (T.as_variant msg_typ))
                (* Trap early, refusing all other messages,
@@ -1494,7 +1499,10 @@ let import_compiled_class (lib : S.comp_unit) wasm : import_declaration =
             (tupE [
               install_arg;
               varE wasm_blob;
-              primE (Ir.SerializePrim ts1') [seqE (List.map varE vs)]])))
+              primE
+                (if !Mo_config.Flags.icwire_internal
+                 then Ir.ICWireSerializePrim ts1' else Ir.SerializePrim ts1')
+                [seqE (List.map varE vs)]])))
         (primE (Ir.CastPrim (T.principal, t_actor)) [varE principal]))
       (List.hd cs))
   in

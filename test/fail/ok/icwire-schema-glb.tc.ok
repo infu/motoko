@@ -1,0 +1,4 @@
+icwire-schema-glb.mo:9.10-9.18: type error [M0096], expression of type
+  shared icwire {a : Nat; b : Bool} -> async ()
+cannot produce expected type
+  None

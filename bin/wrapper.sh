@@ -19,6 +19,10 @@ declare -A envs # list of expected environment variables with paths to products
 real[moc]=src/moc
 hint[moc]="make -C $rel_root/src moc"
 envs[moc]="MOC_RELEASE_RTS MOC_DEBUG_RTS"
+# Public entry point for the isolated Tripwire compiler experiment.
+real[tripwire]=src/moc
+hint[tripwire]="make -C $rel_root/src moc"
+envs[tripwire]="MOC_RELEASE_RTS MOC_DEBUG_RTS"
 real[mo-ld]=src/mo-ld
 hint[mo-ld]="make -C $rel_root/src mo-ld"
 real[mo-doc]=src/mo-doc

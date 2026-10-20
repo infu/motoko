@@ -196,7 +196,7 @@ TEST_MODULES = persistence_20k persistence_small \
   gc_chunk_0 gc_chunk_1 gc_chunk_2 gc_chunk_3 gc_chunk_4 \
   gc_chunk_5 gc_chunk_6 gc_chunk_7 gc_chunk_8 gc_chunk_9 \
   gc_predefined gc_components \
-  bigint bitrel continuation_table crc32 \
+  bigint bitrel blob_finalize continuation_table crc32 \
   leb128 principal_id stable_option text utf8
 
 GIT_HASH := $(shell git rev-parse HEAD 2>/dev/null || echo "0")
@@ -227,6 +227,17 @@ comma := ,
 $(eval $(call test_variant,test64,wasm64-unknown-unknown,\
   -Zbuild-std=core$(comma)alloc$(comma)std$(comma)panic_abort,\
   -W memory64,TEST_DEPENDENCIES_64))
+
+.PHONY: test64-blob_finalize_reject_growth
+test64-blob_finalize_reject_growth: build-test64
+	@trap_output=$$(mktemp); trap 'rm -f "$$trap_output"' EXIT; \
+	if wasmtime -C cache=n -W nan-canonicalization=y -W memory64 \
+	  --invoke test_blob_finalize_reject_growth \
+	  motoko-rts-tests/target-test64/wasm64-unknown-unknown/debug/motoko-rts-tests.wasm \
+	  >"$$trap_output" 2>&1; then cat "$$trap_output"; exit 1; fi; \
+	grep -F 'finalize_blob: initialized length exceeds blob capacity' "$$trap_output"
+
+test64: test64-blob_finalize_reject_growth
 
 .PHONY: test
 test: test64

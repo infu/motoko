@@ -143,10 +143,12 @@ and prim =
   | AssertPrim                        (* assertion *)
   | ThrowPrim                         (* throw *)
   | ShowPrim of Type.typ              (* debug_show *)
+  | ICWireSerializePrim of Type.typ list
   | SerializePrim of Type.typ list    (* Candid serialization prim *)
   | ComputePrim of string * Mo_values.Compute_plugin.specialization
                                      (* specialized compute plugin *)
   | ComputeValuePrim of string        (* singleton intrinsic identity *)
+  | ICWireDeserializePrim of Type.typ list
   | DeserializePrim of Type.typ list  (* Candid deserialization prim *)
   | DeserializeOptPrim of Type.typ list
      (* Candid deserialization prim (returning Opt) *)
@@ -182,7 +184,7 @@ and prim =
                                       (* typ is the current continuation type of cps translation *)
   | CPSAsync of Type.async_sort * Type.typ
   | ICPerformGC
-  | ICReplyPrim of Type.typ list
+  | ICReplyPrim of Type.wire_format * Type.typ list
   | ICRejectPrim
   | ICCallerPrim
   | ICCallPrim
@@ -306,10 +308,12 @@ let map_prim t_typ t_lab p =
   | AssertPrim
   | ThrowPrim -> p
   | ShowPrim t -> ShowPrim (t_typ t)
+  | ICWireSerializePrim ts -> ICWireSerializePrim (List.map t_typ ts)
   | SerializePrim ts -> SerializePrim (List.map t_typ ts)
   | ComputePrim (id, s) ->
     ComputePrim (id, Mo_values.Compute_plugin.map_specialization t_typ s)
   | ComputeValuePrim _ -> p
+  | ICWireDeserializePrim ts -> ICWireDeserializePrim (List.map t_typ ts)
   | DeserializePrim ts -> DeserializePrim (List.map t_typ ts)
   | DeserializeOptPrim ts -> DeserializeOptPrim (List.map t_typ ts)
   | NumConvTrapPrim _
@@ -334,7 +338,7 @@ let map_prim t_typ t_lab p =
   | OtherPrim _ -> p
   | CPSAwait (s, t) -> CPSAwait (s, t_typ t)
   | CPSAsync (s, t) -> CPSAsync (s, t_typ t)
-  | ICReplyPrim ts -> ICReplyPrim (List.map t_typ ts)
+  | ICReplyPrim (wire, ts) -> ICReplyPrim (wire, List.map t_typ ts)
   | ICArgDataPrim
   | ICPerformGC
   | ICRejectPrim
