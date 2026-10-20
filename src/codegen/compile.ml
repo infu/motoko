@@ -4795,8 +4795,13 @@ module Lifecycle = struct
     | InStabilization -> 12L
     | InDestabilization -> 13L
 
-  let ptr () = Stack.end_ ()
+  (* Leave the linked data at its existing address. The lifecycle state is a
+     scalar, so it can live in a Wasm global without a GC root in linear memory.
+     Wasm globals have the same message commit and query rollback semantics. *)
   let end_ () = Int64.add (Stack.end_ ()) Heap.word_size
+
+  let register_globals env =
+    E.add_global64 env "__lifecycle_state" Mutable (int_of_state PreInit)
 
   (* Which states may come before this *)
   let pre_states = function
@@ -4818,13 +4823,11 @@ module Lifecycle = struct
     | InDestabilization -> [InInit]
 
   let get env =
-    compile_unboxed_const (ptr ()) ^^
-    load_unskewed_ptr
+    G.i (GlobalGet (nr (E.get_global env "__lifecycle_state")))
 
   let set env new_state =
-    compile_unboxed_const (ptr ()) ^^
     compile_unboxed_const (int_of_state new_state) ^^
-    store_unskewed_ptr
+    G.i (GlobalSet (nr (E.get_global env "__lifecycle_state")))
 
   let during_explicit_upgrade env =
     get env ^^
@@ -6241,8 +6244,8 @@ module RTS_Exports = struct
     This reserve can be used by queries, composite queries, and (graph-copy) upgrades. *)
     let keep_memory_reserve_fi = E.add_fun env "keep_memory_reserve" (
       Func.of_body env [] [I32Type] (fun env ->
-        Lifecycle.(is_in int_of_state InUpdate) ^^
-        Lifecycle.(is_in int_of_state InInit) ^^
+        Lifecycle.(is_in env InUpdate) ^^
+        Lifecycle.(is_in env InInit) ^^
         G.i (Binary (Wasm_exts.Values.I64 I64Op.Or)) ^^
         Bool.to_rts_int32
       )
@@ -14597,6 +14600,7 @@ let compile mode ~(enhanced_migration:string option) rts (prog : Ir.prog) : Wasm
 
   IC.register_globals env;
   Stack.register_globals env;
+  Lifecycle.register_globals env;
   GC.register_globals env;
   StableMem.register_globals env;
   Serialization.Registers.register_globals env;
