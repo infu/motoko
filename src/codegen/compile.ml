@@ -3187,6 +3187,19 @@ module MakeCompact (Num : BigNumType) : BigNumType = struct
     let ubitsL = Int64.of_int(BitTagged.ubits_of Type.Int) in
     compile_shrS_const (Int64.sub 64L ubitsL) ^^ Num.from_signed_word64 env
 
+  let boxed_arithmetic slow env get_a get_b set_res get_res =
+    get_a ^^ BitTagged.if_tagged_scalar env [I64Type]
+      (get_a ^^ box env)
+      get_a ^^
+    get_b ^^ BitTagged.if_tagged_scalar env [I64Type]
+      (get_b ^^ box env)
+      get_b ^^
+    slow env ^^ set_res ^^ get_res ^^
+    fits_in_vanilla env ^^
+    E.if1 I64Type
+      (get_res ^^ Num.truncate_to_word64 env ^^ BitTagged.tag env Type.Int)
+      get_res
+
   (* check if both arguments are tagged scalars,
      if so, perform the fast path.
      Otherwise make sure that both arguments are in heap representation,
@@ -3208,22 +3221,41 @@ module MakeCompact (Num : BigNumType) : BigNumType = struct
               (get_res ^^ apply_tag env)
               (get_res ^^ box env)
           end
-          begin
-            get_a ^^ BitTagged.if_tagged_scalar env [I64Type]
-              (get_a ^^ box env)
-              get_a ^^
-            get_b ^^ BitTagged.if_tagged_scalar env [I64Type]
-              (get_b ^^ box env)
-              get_b ^^
-            slow env ^^ set_res ^^ get_res ^^
-            fits_in_vanilla env ^^
-            E.if1 I64Type
-              (get_res ^^ Num.truncate_to_word64 env ^^ BitTagged.tag env Type.Int)
-              get_res
-          end
+          (boxed_arithmetic slow env get_a get_b set_res get_res)
       )
 
-  let compile_add = try_unbox2 "B_add" Word64.compile_add Num.compile_add
+  (* For tagged scalars T(x) = 4*x + tag, addition and subtraction can use
+     their entire signed payload range. Check signed overflow on the final
+     tagged result; an intermediate addition can overflow even when it fits.
+     The tag has no sign bit, so the usual operand/result XOR tests apply.
+     Overflow and boxed inputs retain the original operands for the fallback. *)
+  let compact_add_sub name subtract slow env =
+    Func.share_code2 Func.Always env name
+      (("a", I64Type), ("b", I64Type)) [I64Type]
+      (fun env get_a get_b ->
+        let set_res, get_res = new_local env "res" in
+        let tag = TaggingScheme.tag_of_typ Type.Int in
+        get_a ^^ get_b ^^
+        BitTagged.if_both_tagged_scalar env []
+          begin
+            get_a ^^ get_b ^^
+            (if subtract then
+              Word64.compile_signed_sub env ^^ compile_add_const tag
+            else
+              Word64.compile_add env ^^ compile_sub_const tag) ^^
+            set_res ^^
+            get_a ^^ (if subtract then get_b else get_res) ^^
+            G.i (Binary (Wasm_exts.Values.I64 I64Op.Xor)) ^^
+            (if subtract then get_a else get_b) ^^ get_res ^^
+            G.i (Binary (Wasm_exts.Values.I64 I64Op.Xor)) ^^
+            G.i (Binary (Wasm_exts.Values.I64 I64Op.And)) ^^
+            compile_rel_const I64Op.GeS 0L ^^
+            E.if0 (get_res ^^ G.i Return) G.nop
+          end
+          G.nop ^^
+        boxed_arithmetic slow env get_a get_b set_res get_res)
+
+  let compile_add = compact_add_sub "B_add" false Num.compile_add
 
   let adjust_arg2 code env =
     compile_shrS_const (Int64.of_int (64 - BitTagged.ubits_of Type.Int)) ^^
@@ -3233,12 +3265,29 @@ module MakeCompact (Num : BigNumType) : BigNumType = struct
     compile_shl_const (Int64.of_int (64 - BitTagged.ubits_of Type.Int))
 
   let compile_mul = try_unbox2 "B_mul" (adjust_arg2 Word64.compile_mul) Num.compile_mul
-  let compile_signed_sub = try_unbox2 "B+sub" Word64.compile_signed_sub Num.compile_signed_sub
+  let compile_signed_sub =
+    compact_add_sub "B+sub" true Num.compile_signed_sub
   let compile_signed_div = try_unbox2 "B+div" (adjust_result Word64.compile_signed_div) Num.compile_signed_div
   let compile_signed_mod = try_unbox2 "B_mod" Word64.compile_signed_mod Num.compile_signed_mod
   let compile_unsigned_div = try_unbox2 "B_div" (adjust_result Word64.compile_unsigned_div) Num.compile_unsigned_div
   let compile_unsigned_rem = try_unbox2 "B_rem" Word64.compile_unsigned_rem Num.compile_unsigned_rem
-  let compile_unsigned_sub = try_unbox2 "B_sub" Word64.compile_unsigned_sub Num.compile_unsigned_sub
+  let compile_unsigned_sub env =
+    Func.share_code2 Func.Always env "B_sub"
+      (("a", I64Type), ("b", I64Type)) [I64Type]
+      (fun env get_a get_b ->
+        let set_res, get_res = new_local env "res" in
+        get_a ^^ get_b ^^
+        BitTagged.if_both_tagged_scalar env [I64Type]
+          begin
+            (* Compact Nat operands are nonnegative. Once underflow has been
+               excluded their difference always fits the compact range. *)
+            get_a ^^ get_b ^^ compile_comparison I64Op.LtU ^^
+            E.then_trap_with env "Natural subtraction underflow" ^^
+            get_a ^^ get_b ^^ Word64.compile_signed_sub env ^^
+            compile_add_const (TaggingScheme.tag_of_typ Type.Int)
+          end
+          (boxed_arithmetic Num.compile_unsigned_sub env
+             get_a get_b set_res get_res))
 
   let compile_unsigned_pow env =
     Func.share_code2 Func.Always env "B_pow" (("a", I64Type), ("b", I64Type)) [I64Type]
