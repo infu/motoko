@@ -20,6 +20,10 @@ The existing `make -C src moc` build target and `bin/moc` test-tool entry remain
 available for the compiler repository's tooling. This experiment does not
 replace an installed compiler or change another worktree's commands.
 
+Tripwire defaults to Wasm32 linear memory. Use `--wasm64` for larger heaps;
+the managed-value layout, plugin ABI and ICWire bytes are unchanged. See
+[Wasm targets](Wasm32.md) for memory limits and compilation details.
+
 ```motoko
 type Request = { id : Nat; body : Blob };
 type Receipt = { accepted : Bool };

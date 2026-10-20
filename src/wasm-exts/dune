@@ -1,5 +1,12 @@
 (library
   (name wasm_exts)
+  (modules (:standard \ test_memory32))
   (libraries wasm yojson lib prelude mo_config lang_utils)
   (instrumentation (backend bisect_ppx --bisect-silent yes))
+)
+
+(test
+  (name test_memory32)
+  (modules test_memory32)
+  (libraries wasm_exts lib)
 )

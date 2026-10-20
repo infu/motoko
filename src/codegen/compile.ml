@@ -14717,7 +14717,15 @@ and conclude_module env set_serialization_globals =
   (* For debugging *)
   if !Flags.verbose then E.object_pool_report env;
 
-  ComputePlugins.link emodule (E.get_rts env)
+  let linked = ComputePlugins.link emodule (E.get_rts env) in
+  match !Flags.wasm_target with
+  | Flags.Wasm64 -> linked
+  | Flags.Wasm32 ->
+    (* Lower after linking so the compiler, RTS and compute plugins share the
+       same addressing rules. Imported actor classes pass through here too. *)
+    begin try Wasm_exts.Memory32.lower linked with
+    | Wasm_exts.Memory32.Error message -> fatal "Wasm32 target: %s" message
+    end
 
 let compile mode ~icwire_endpoint_overrides
     ~(enhanced_migration:string option) rts (prog : Ir.prog)

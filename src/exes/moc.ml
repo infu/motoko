@@ -67,6 +67,10 @@ let load_compute_plugin path =
 let argspec =
   Args.ai_args
   @ [
+  "--wasm32", Arg.Unit (fun () -> Flags.wasm_target := Flags.Wasm32),
+    " target 32-bit WebAssembly linear memory (default)";
+  "--wasm64", Arg.Unit (fun () -> Flags.wasm_target := Flags.Wasm64),
+    " target 64-bit WebAssembly linear memory";
   "--icwire-internal", Arg.Set Flags.icwire_internal,
     " use ICWire for constructor arguments and compiler-private messages";
   "--trap-on-candid", Arg.Set Flags.trap_on_candid,
@@ -195,7 +199,9 @@ let argspec =
   (* persistence *)
   "--enhanced-orthogonal-persistence",
   Arg.Unit (fun () -> Flags.explicit_enhanced_orthogonal_persistence := true),
-  " use enhanced orthogonal persistence (default): Scalable and fast upgrades using a persistent 64-bit main memory. Also, enable upgrade from classical to enhanced orthogonal persistence";
+  " use enhanced orthogonal persistence (default): persistent main memory " ^
+  "with a 64-bit value layout. Also, enable upgrade from classical to " ^
+  "enhanced orthogonal persistence";
 
   "-unguarded-enhanced-orthogonal-persistence",
   Arg.Unit (fun () -> Flags.explicit_enhanced_orthogonal_persistence := false),

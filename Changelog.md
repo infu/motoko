@@ -4,6 +4,10 @@
 
 * motoko (`moc`)
 
+  * Experimental Tripwire branch only: target Wasm32 linear memory by default,
+    with checked address narrowing, the existing 64-bit managed-value layout
+    and compute-plugin ABI, and enhanced orthogonal persistence. Select
+    `--wasm32` explicitly or `--wasm64` for larger heaps (#6443).
   * Experimental Tripwire branch only: add ICWire `compact` and `speed`
     code generation policies, with `speed` as the default. Select a global
     policy with `--icwire-opt`, a query policy with `--icwire-opt-query`, or

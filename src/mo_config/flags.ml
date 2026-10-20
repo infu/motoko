@@ -5,6 +5,11 @@ module S = Set.Make(String)
 
 type compile_mode = ICMode | WASIMode
 
+(* Linear-memory target; managed values retain the enhanced heap layout. *)
+type wasm_target = Wasm32 | Wasm64
+
+let wasm_target = ref Wasm32
+
 type instruction_limits = {
   upgrade: Int64.t;
   update_call: Int64.t;
