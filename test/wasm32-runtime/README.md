@@ -22,6 +22,13 @@ These upgrades await all asynchronous work and keep the compiler's existing
 pre-upgrade guard against outstanding callbacks enabled. Switching memory
 targets does not convert unresolved callback identities.
 
+Set `WASM32_RUNTIME_SANITY=0` to run these same cases against release code,
+including compiler-generated load/store guard elision and the unconditional
+shared stack-pointer bound checks. The default `1` keeps every narrowing check
+and links the debug runtime. Both modes retain `--force-gc`; the process report
+records the selected mode. This option does not add scenarios or count repeated
+executions as distinct tests.
+
 ```sh
 TRIPWIRE=/absolute/path/to/moc \
 ICWIRE_PLUGIN=/absolute/path/to/plugins/dist/icwire \

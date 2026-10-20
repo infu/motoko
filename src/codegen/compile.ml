@@ -10256,7 +10256,7 @@ module ComputePlugins = struct
       Linking.LinkModule.validate_compute_plugin runtime;
       Linking.LinkModule.link ~finalize:false ~keep_exports:false base
         (Plugin_codegen.module_name plugin) runtime
-    ) linked used |> Linking.LinkModule.finalize in
+    ) linked used in
     List.iter (fun (i : import) ->
       let module_name = Lib.Utf8.encode i.Wasm.Source.it.module_name in
       if module_name = "env" || String.starts_with ~prefix:"compute." module_name
@@ -14718,14 +14718,21 @@ and conclude_module env set_serialization_globals =
   if !Flags.verbose then E.object_pool_report env;
 
   let linked = ComputePlugins.link emodule (E.get_rts env) in
-  match !Flags.wasm_target with
+  let result = match !Flags.wasm_target with
   | Flags.Wasm64 -> linked
   | Flags.Wasm32 ->
-    (* Lower after linking so the compiler, RTS and compute plugins share the
-       same addressing rules. Imported actor classes pass through here too. *)
-    begin try Wasm_exts.Memory32.lower linked with
+    (* Linking appends native functions, preserving this generated prefix.
+       Only generated loads/stores can rely on bounded heap/stack invariants;
+       native Rust/C frames and all bulk/system operations retain checks. *)
+    let unchecked_functions =
+      if !Flags.sanity then 0 else
+        List.length emodule.Wasm_exts.CustomModule.module_.funcs in
+    begin try Wasm_exts.Memory32.lower ~unchecked_functions linked with
     | Wasm_exts.Memory32.Error message -> fatal "Wasm32 target: %s" message
-    end
+    end in
+  (* Keep the resolved stack export until lowering has identified its global;
+     final output still exposes only the standard canister interfaces. *)
+  Linking.LinkModule.finalize result
 
 let compile mode ~icwire_endpoint_overrides
     ~(enhanced_migration:string option) rts (prog : Ir.prog)

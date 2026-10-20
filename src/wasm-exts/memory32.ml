@@ -52,8 +52,11 @@ let ic0_narrowed name =
   | "cost_http_request_v2" -> all 3 false
   | _ -> None
 
-let lower (extended : extended_module) =
+let lower ?(unchecked_functions = 0) (extended : extended_module) =
   let original = extended.module_ in
+  if unchecked_functions < 0 ||
+      unchecked_functions > List.length original.funcs then
+    error "invalid compiler function prefix for memory32 lowering";
   if List.exists (fun import -> match import.it.idesc.it with
     | MemoryImport _ | TableImport _ -> true
     | _ -> false) original.imports then
@@ -181,7 +184,43 @@ let lower (extended : extended_module) =
   in
   let grow_main = lazy (grow MemoryGrow) in
   let grow_stable = lazy (grow StableGrow) in
-  let transform_function function_ =
+  let stack_guard = if unchecked_functions = 0 then None else begin
+    let stack_exports = List.filter_map (fun (export : export) ->
+      if Lib.Utf8.encode export.it.name <> "__stack_pointer" then None else
+        match export.it.edesc.it with
+        | GlobalExport index -> Some index.it
+        | _ -> error "memory32 compiler stack pointer is not a global"
+    ) original.exports in
+    let index = match stack_exports with
+      | [index] -> index
+      | _ -> error "memory32 requires one exported compiler stack pointer"
+    in
+    let global_imports = List.fold_left (fun count import ->
+      match import.it.idesc.it with GlobalImport _ -> count + 1 | _ -> count
+    ) 0 original.imports in
+    let position = Int32.to_int index - global_imports in
+    if position < 0 || position >= List.length original.globals then
+      error "memory32 compiler stack pointer must be module-defined";
+    let global = List.nth original.globals position in
+    let bound = match global.it.gtype, global.it.value.it with
+      | GlobalType (I64Type, Mutable),
+          [{it = Const {it = Values.I64 bound; _}; _}]
+          when bound >= 0L && bound <= max_u32 -> bound
+      | _ -> error "memory32 compiler stack requires a constant i64 bound"
+    in
+    let guard = add_function "checked_stack_pointer" [I64Type] [I64Type] [
+      get 0l; i64 bound; nr (Compare (Values.I64 I64Op.GtU));
+      nr (If (ValBlockType None, [nr Unreachable], [])); get 0l;
+    ] in
+    Some (index, guard)
+  end in
+  let transform_function function_index function_ =
+    (* This prefix is supplied before linking: generated Motoko/plugin code
+       addresses bounded heap objects and compiler-managed stack frames.
+       Native Rust/C frames require the full check, including stack underflow
+       beyond one reserved page. No other operations use this exemption. *)
+    let heap_narrow =
+      if function_index < unchecked_functions then wrap else narrow in
     let FuncType (parameters, _) = function_type function_.it.ftype.it in
     let locals = ref function_.it.locals in
     let scratch_slots = Hashtbl.create 8 in
@@ -214,14 +253,14 @@ let lower (extended : extended_module) =
       | Load operation ->
         if operation.offset < 0L || operation.offset > max_u32 then
           [nr Unreachable]
-        else [narrow; value]
+        else [heap_narrow; value]
       | Store operation ->
         if operation.offset < 0L || operation.offset > max_u32 then
           [nr Unreachable]
         else
           let temporary = scratch
             ("store_" ^ string_of_value_type operation.ty) operation.ty in
-          [set temporary; narrow; get temporary; value]
+          [set temporary; heap_narrow; get temporary; value]
       | MemorySize | StableSize -> [value; extend_u]
       | MemoryGrow -> [call (Lazy.force grow_main)]
       | StableGrow -> [call (Lazy.force grow_stable)]
@@ -236,12 +275,18 @@ let lower (extended : extended_module) =
         [set length; set source; narrow; get source; get length; value]
       | Call index -> [{value with it = Call (nr (remap_call index.it))}]
       | CallIndirect _ -> [call indirect_index; value]
+      | GlobalSet index ->
+        begin match stack_guard with
+        | Some (stack_index, guard) when index.it = stack_index ->
+          [call guard; value]
+        | _ -> unchanged ()
+        end
       | _ -> unchanged ()
     in
     let body = instructions function_.it.body in
     {function_ with it = {function_.it with locals = !locals; body}}
   in
-  let funcs = List.map transform_function original.funcs in
+  let funcs = List.mapi transform_function original.funcs in
   let function_signature index =
     let position = Int32.to_int index in
     if position < imported_count then

@@ -113,6 +113,71 @@ let test_import_references () =
   | FuncExport index -> assert (index.it = table_function.it)
   | _ -> assert false
 
+let test_compiler_prefix () =
+  let body = [i64 0L;
+    nr (Load {ty = I64Type; align = 3; offset = 0L; sz = None}); nr Drop;
+    i64 0L; i64 0L; i64 0L; nr MemoryCopy] in
+  let candidate = {base with module_ = {base.module_ with
+    funcs = [func 0l body; func 1l body];
+    globals = [nr {gtype = GlobalType (I64Type, Mutable);
+      value = nr [i64 1024L]}];
+    exports = [nr {name = Lib.Utf8.decode "__stack_pointer";
+      edesc = nr (GlobalExport (nr 0l))}];
+  }} in
+  let checked = lower candidate in
+  assert (checked = lower ~unchecked_functions:0 candidate);
+  let result = lower ~unchecked_functions:1 candidate in
+  let first = List.hd result.module_.funcs in
+  let second = List.nth result.module_.funcs 1 in
+  begin match (List.nth first.it.body 1).it,
+      (List.nth second.it.body 1).it with
+  | Convert (Wasm_exts.Values.I32 I32Op.WrapI64), Call _ -> ()
+  | _ -> assert false
+  end;
+  (* Bulk operations in the exempt prefix still use checked narrowing. *)
+  assert (List.exists (fun instruction -> match instruction.it with
+    | Call _ -> true | _ -> false) first.it.body);
+  List.iter (fun count ->
+    match lower ~unchecked_functions:count candidate with
+    | _ -> assert false
+    | exception Wasm_exts.Memory32.Error _ -> ()
+  ) [-1; 3]
+
+let emit_stack_module path =
+  let get index = nr (LocalGet (nr index)) in
+  let store = nr (Store {ty = I64Type; align = 0; offset = 0L; sz = None}) in
+  let types = [nr (FuncType ([], []));
+    nr (FuncType ([I64Type], [])); nr (FuncType ([], [I64Type]))] in
+  let definitions = [
+    "callback", 0l, [nr (GlobalGet (nr 0l)); i64 99L; store];
+    "native_call", 1l, [get 0l; nr (GlobalSet (nr 0l));
+      nr (Call (nr 0l))];
+    "marker", 2l, [i64 128L;
+      nr (Load {ty = I64Type; align = 0; offset = 0L; sz = None})];
+    "seed", 0l, [i64 128L; i64 42L; store];
+  ] in
+  let funcs = List.map (fun (_, signature, body) -> func signature body)
+    definitions in
+  let exports = List.mapi (fun index (name, _, _) -> nr {
+    name = Lib.Utf8.decode name;
+    edesc = nr (FuncExport (nr (Int32.of_int index)));
+  }) definitions @ [nr {name = Lib.Utf8.decode "__stack_pointer";
+    edesc = nr (GlobalExport (nr 0l))}] in
+  let candidate = {base with module_ = {base.module_ with
+    types; funcs; exports; imports = []; elems = []; tables = [];
+    globals = [nr {gtype = GlobalType (I64Type, Mutable);
+      value = nr [i64 1024L]}];
+  }} in
+  let result = lower ~unchecked_functions:1 candidate in
+  (* The native prefix successor must check its SP before publishing it. *)
+  begin match (List.nth result.module_.funcs 1).it.body with
+  | _ :: {it = Call _; _} :: {it = GlobalSet _; _} :: _ -> ()
+  | _ -> assert false
+  end;
+  let _, binary = Wasm_exts.CustomModuleEncode.encode result in
+  Out_channel.with_open_bin path (fun output ->
+    Out_channel.output_string output binary)
+
 let emit_boundary_module path =
   let get index = nr (LocalGet (nr index)) in
   let load ?(offset = 0L) ?sz () =
@@ -228,6 +293,8 @@ let () =
   test_memory_operations ();
   test_limits ();
   test_import_references ();
+  test_compiler_prefix ();
   Option.iter emit_boundary_module (Sys.getenv_opt "MEMORY32_TEST_WASM");
   Option.iter emit_callback_module
-    (Sys.getenv_opt "MEMORY32_TEST_CALLBACK_WASM")
+    (Sys.getenv_opt "MEMORY32_TEST_CALLBACK_WASM");
+  Option.iter emit_stack_module (Sys.getenv_opt "MEMORY32_TEST_STACK_WASM")

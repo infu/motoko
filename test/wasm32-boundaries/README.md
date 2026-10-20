@@ -14,6 +14,7 @@ fixture_dir=$(mktemp -d)
   cd src
   MEMORY32_TEST_WASM="$fixture_dir/boundaries.wasm" \
   MEMORY32_TEST_CALLBACK_WASM="$fixture_dir/callbacks.wasm" \
+  MEMORY32_TEST_STACK_WASM="$fixture_dir/stack-callbacks.wasm" \
     dune exec wasm-exts/test_memory32.exe
 )
 python3 test/wasm32-boundaries/run-wasmtime.py \
@@ -25,6 +26,9 @@ node test/wasm32-boundaries/run-memory.js \
 node test/wasm32-boundaries/run-callbacks.js \
   --wasm "$fixture_dir/callbacks.wasm" \
   --output "$fixture_dir/callbacks.json"
+node test/wasm32-boundaries/run-stack-callbacks.js \
+  --wasm "$fixture_dir/stack-callbacks.wasm" \
+  --output "$fixture_dir/stack-callbacks.json"
 ```
 
 Use `--wasmtime /path/to/wasmtime` when it is outside `PATH`. Each runner exits
@@ -44,3 +48,14 @@ and cleanup ABI, unsigned environment extension, invalid callback indexes,
 unchanged 64-bit timestamps and stable64 arguments, and rejection of internal
 indirect calls into the appended callback half of the table. These stubs do
 not replace PocketIC system-API integration tests.
+
+The seven stack-callback cases exercise a native function that publishes its
+stack pointer and immediately invokes a compiler-generated callback without
+accessing its own frame. The callback deliberately uses an unchecked store.
+Five invalid pointer values, including underflow and a value that would wrap
+onto the low-memory marker, must trap before publishing the pointer or changing
+that marker. Two valid values exercise the bound and prove the callback can
+execute. This checks the shared stack-pointer guard needed when release builds
+omit redundant checks for compiler-generated heap loads/stores; native memory
+accesses remain checked. Repeated execution of the portable runner is the same
+seven cases, not additional scenarios.

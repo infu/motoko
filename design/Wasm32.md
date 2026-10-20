@@ -28,6 +28,22 @@ growth reports failure; out-of-range addresses trap rather than wrapping into
 low memory. Internet Computer stable memory still uses its separate 64-bit
 system API and is not reduced to the main-memory limit.
 
+Normal builds (without `--sanity-checks`) omit redundant high-address checks
+for ordinary loads/stores
+in compiler-generated functions. These addresses come from bounded heap
+objects or compiler-managed stack frames; array, blob and decoder bounds
+checks remain in place. Linking appends native runtime functions after this
+generated prefix. Rust/C runtime loads/stores retain narrowing checks because
+their stack frames have different underflow behavior. `--sanity-checks` also
+checks every generated load/store. Bulk memory operations, system-call
+arguments, callback indices/environments and memory growth remain checked in
+both modes. This optimization relies on the compiler and trusted plugin/FFI
+contracts; it does not preserve arbitrary invalid raw-pointer Wasm behavior.
+Normal builds additionally check every write to the shared stack pointer,
+including native function frames, against its initial stack bound. This traps
+native stack underflow before a callback can use compiler-managed temporary
+storage, even if the native function has not accessed its own frame yet.
+
 Enhanced orthogonal persistence retains the same 64-bit layout. Any deployed
 heap must fit the selected target's memory limit; use Wasm64 when a retained
 heap requires more memory. Changing the target is not a workflow or stored

@@ -15,6 +15,9 @@ if (OUT / 'process-results.json').exists():
     raise FileExistsError(f'Use a fresh evidence directory: {OUT}')
 COMPILER = Path(os.environ['TRIPWIRE']).resolve()
 PLUGIN = Path(os.environ['ICWIRE_PLUGIN']).resolve()
+SANITY = os.environ.get('WASM32_RUNTIME_SANITY', '1')
+if SANITY not in {'0', '1'}:
+    raise ValueError('WASM32_RUNTIME_SANITY must be 0 or 1')
 ENV = os.environ.copy()
 ENV.setdefault('MOC_RELEASE_RTS', str(SDK / 'rts/mo-rts.wasm'))
 ENV.setdefault('MOC_DEBUG_RTS', str(SDK / 'rts/mo-rts-debug.wasm'))
@@ -23,7 +26,8 @@ inputs = [COMPILER, Path(ENV['MOC_RELEASE_RTS']),
           Path(ENV['MOC_DEBUG_RTS'])]
 inputs += sorted(p for p in PLUGIN.rglob('*') if p.is_file())
 inputs += sorted(p for p in HERE.iterdir() if p.is_file())
-report = {'passed': False, 'processes': [], 'artifacts': {},
+report = {'passed': False, 'sanityChecks': SANITY == '1',
+          'processes': [], 'artifacts': {},
           'inputs': {str(p): digest(p) for p in inputs}}
 
 
@@ -52,7 +56,8 @@ try:
         wasm = OUT / f'{name}.wasm'
         run(name, [str(COMPILER), '--plugin', str(PLUGIN),
             '--icwire-internal', '--trap-on-candid',
-            '--enhanced-orthogonal-persistence', '--sanity-checks',
+            '--enhanced-orthogonal-persistence',
+            *(['--sanity-checks'] if SANITY == '1' else []),
             '--force-gc', '-A=M0270', '-Werror', '-g', *flags, '-o', str(wasm),
             str(HERE / 'actor.mo')])
         report['artifacts'][name] = {'file': wasm.name,
