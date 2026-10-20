@@ -4258,19 +4258,6 @@ module Object = struct
       G.i Unreachable
     )
 
-  (* Returns a pointer to the object field (possibly following the indirection) *)
-  let idx_hash env low_bound indirect =
-    if indirect
-    then
-      let name = Printf.sprintf "obj_idx_ind<%d>" low_bound in
-      Func.share_code2 Func.Never env name (("x", I64Type), ("hash", I64Type)) [I64Type] (fun env get_x get_hash ->
-      get_x ^^ get_hash ^^
-      idx_hash_raw env low_bound ^^
-      load_ptr ^^ Tagged.load_forwarding_pointer env ^^
-      compile_add_const (Int64.mul MutBox.field Heap.word_size)
-    )
-    else idx_hash_raw env low_bound
-
   let field_type env obj_type s =
     let _, fields = Type.as_obj_sub [s] obj_type in
     Type.lookup_val_field s fields
@@ -4299,8 +4286,27 @@ module Object = struct
 
   (* Returns a pointer to the object field (possibly following the indirection) *)
   let idx env obj_type f =
-    compile_unboxed_const (E.hash env f) ^^
-    idx_hash env (field_lower_bound env obj_type f) (is_mut_field env obj_type f)
+    let low_bound = field_lower_bound env obj_type f in
+    let hash = E.hash env f in
+    let set_obj, get_obj = new_local env "object" in
+    (* The type guarantees at least [low_bound + 1] physical fields. Exact
+       shapes have the requested label at that position; width subtyping may
+       insert earlier fields, in which case retain the original hash scan. *)
+    Tagged.load_forwarding_pointer env ^^ set_obj ^^
+    get_obj ^^ Tagged.load_field env hash_ptr_field ^^
+    Blob.payload_ptr_unskewed env ^^
+    compile_add_const Int64.(mul Heap.word_size (of_int low_bound)) ^^
+    load_unskewed_ptr ^^ compile_eq_const hash ^^
+    E.if1 I64Type
+      (get_obj ^^
+       compile_add_const Int64.(mul Heap.word_size
+         (add header_size (of_int low_bound))))
+      (get_obj ^^ compile_unboxed_const hash ^^
+       idx_hash_raw env low_bound) ^^
+    (if is_mut_field env obj_type f then
+       load_ptr ^^ Tagged.load_forwarding_pointer env ^^
+       compile_add_const (Int64.mul MutBox.field Heap.word_size)
+     else G.nop)
 
   (* load the value (or the mutbox) *)
   let load_idx_raw env f =
