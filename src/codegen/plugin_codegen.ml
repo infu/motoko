@@ -102,6 +102,12 @@ module type Backend = sig
        generation time, evaluates all operands once left-to-right, then checks
        the unboxed i64 index and writes with the normal GC barrier. No result. *)
     val set : env -> Type.typ -> Type.typ -> G.t -> G.t -> G.t -> G.t
+    (* Copy a range within a mutable managed array. Evaluate array, source,
+       destination and length once left-to-right; indices are unboxed i64.
+       Check both complete ranges before writing, allowing an empty range at
+       the array end. Overlap is safe and pointer writes use the GC barrier.
+       The borrowed cursors never cross a GC safepoint. No result. *)
+    val move_within : env -> Type.typ -> G.t -> G.t -> G.t -> G.t -> G.t
   end
   module Tuple : sig
     val load_n : env -> int64 -> G.t

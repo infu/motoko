@@ -9824,6 +9824,80 @@ module ComputePlugins = struct
           Tagged.write_with_barrier env
         else get_value ^^ store_ptr)
 
+      let move_within env array_type array source destination length =
+        let element_type = match Type.normalize array_type with
+          | Type.Array (Type.Mut typ) -> typ
+          | _ -> fatal "compute plugin Arr.move_within requires a mutable array"
+        in
+        let pointers = potential_pointer element_type in
+        array ^^ source ^^ destination ^^ length ^^
+        Func.share_code Func.Always env
+          (if pointers then "plugin_array_move_within_pointer"
+           else "plugin_array_move_within_scalar")
+          ["array", I64Type; "source", I64Type;
+           "destination", I64Type; "length", I64Type] []
+          (fun env arguments ->
+            let array = List.nth arguments 0 in
+            let source = List.nth arguments 1 in
+            let destination = List.nth arguments 2 in
+            let length = List.nth arguments 3 in
+            let set_array, get_array = new_local env "move_array" in
+            let set_size, get_size = new_local env "move_size" in
+            let set_source, get_source = new_local env "move_source" in
+            let set_destination, get_destination =
+              new_local env "move_destination" in
+            let set_step, get_step = new_local env "move_step" in
+            let bounds start =
+              start ^^ get_size ^^ compile_comparison I64Op.LeU ^^
+              E.else_trap_with env "Array index out of bounds" ^^
+              length ^^ get_size ^^ start ^^
+              G.i (Binary (Wasm_exts.Values.I64 I64Op.Sub)) ^^
+              compile_comparison I64Op.LeU ^^
+              E.else_trap_with env "Array index out of bounds"
+            in
+            let cursor index =
+              get_array ^^ index ^^ compile_add_const Arr.header_size ^^
+              compile_mul_const Arr.element_size ^^
+              G.i (Binary (Wasm_exts.Values.I64 I64Op.Add))
+            in
+            let write =
+              if pointers then
+                get_destination ^^ compile_add_const ptr_unskew ^^
+                get_source ^^ load_ptr ^^ Tagged.write_with_barrier env
+              else get_destination ^^ get_source ^^ load_ptr ^^ store_ptr
+            in
+            array ^^ Tagged.load_forwarding_pointer env ^^ set_array ^^
+            get_array ^^ Tagged.load_field env Arr.len_field ^^ set_size ^^
+            bounds source ^^ bounds destination ^^
+            length ^^ compile_unboxed_zero ^^ compile_comparison I64Op.Ne ^^
+            E.if0
+              (source ^^ destination ^^ compile_comparison I64Op.Ne ^^
+               E.if0
+                 (cursor source ^^ set_source ^^
+                  cursor destination ^^ set_destination ^^
+                  source ^^ destination ^^ compile_comparison I64Op.LtU ^^
+                  E.if0
+                    (let offset =
+                       length ^^ compile_add_const (-1L) ^^
+                       compile_mul_const Arr.element_size in
+                     get_source ^^ offset ^^
+                     G.i (Binary (Wasm_exts.Values.I64 I64Op.Add)) ^^
+                     set_source ^^
+                     get_destination ^^ offset ^^
+                     G.i (Binary (Wasm_exts.Values.I64 I64Op.Add)) ^^
+                     set_destination ^^
+                     compile_unboxed_const (Int64.neg Arr.element_size) ^^
+                     set_step)
+                    (compile_unboxed_const Arr.element_size ^^ set_step) ^^
+                  length ^^ from_0_to_n env (fun _ ->
+                    write ^^
+                    get_source ^^ get_step ^^
+                    G.i (Binary (Wasm_exts.Values.I64 I64Op.Add)) ^^
+                    set_source ^^
+                    get_destination ^^ get_step ^^
+                    G.i (Binary (Wasm_exts.Values.I64 I64Op.Add)) ^^
+                    set_destination)) G.nop) G.nop)
+
       let tabulate_with_sort env sort length element =
         let set_len, get_len = new_local env "plugin_array_length" in
         let set_array, get_array = new_local env "plugin_array" in
