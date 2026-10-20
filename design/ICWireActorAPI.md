@@ -56,7 +56,7 @@ from a method name or inspect the returned bytes. Existing declarations without
 
 ## Bytes and schemas
 
-The compiler specializes the same `icwire_encode_bounded` and `icwire_decode`
+The compiler specializes the same `icwire_encode` and `icwire_decode`
 plugin operations used by `mo:fast/ICWire`. Load the ICWire plugin when compiling an
 actor that uses this API; endpoint payload types are validated against the
 loaded plugin. There is no separate protocol wrapper, `DIDL` magic, schema
@@ -96,23 +96,13 @@ and trailing bytes in its normal typed pass. An unsuccessful decode traps
 before the method body runs. An unsuccessful reply encode traps instead of
 publishing a partial reply.
 
-Automatic API encoding uses `ICWire.encodeBounded`, including outgoing arguments,
-successful replies, constructor arguments and compiler-private async messages.
-Each concrete schema has a transient capacity hint, initially 256 bytes. A
-successful write publishes only its actual bytes. If the capacity is too small,
-the compiler measures the required size and retries the bounded writer with the
-next power-of-two capacity, up to the existing 16 MiB codec limit. It never falls
-back to the exact encoder. Invalid values and values beyond the codec limits
-still trap.
-
-After a successful write, a capacity used less than one-quarter is halved,
-down to 16 bytes. Fixed-width and primitive roots already receive exact-sized
-allocations inside the bounded plugin. The hints add no wire bytes and reset
-on upgrade. Query changes roll back, so a query-only schema exceeding the
-initial capacity can need sizing and retry on every call. Successful writes
-with sufficient capacity avoid a sizing traversal; growth also incurs the
-plugin's diagnostic traversal and a size measurement. The codec limit does
-not override the IC's separate request and response size limits.
+Automatic API encoding uses exact-size `ICWire.encode`, including outgoing
+arguments, successful replies, constructor arguments and compiler-private async
+messages. The plugin measures the encoding, allocates its exact output size and
+writes the value. Automatic encoding has no adaptive capacity hints or capacity
+retries. Invalid values and values beyond the existing 16 MiB codec limit still
+trap. This limit does not override the IC's separate request and response size
+limits. Explicit `ICWire.encodeBounded` remains available to application code.
 
 ## Candid and discovery
 

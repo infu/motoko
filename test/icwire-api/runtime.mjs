@@ -168,8 +168,8 @@ async function suite(pic, mode) {
     await equalUpdate('echoActor', principal(b));
     await equalUpdate('callReturned', principal(b), nat(456));
   });
-  await check(label('adaptive bounded output grows and shrinks without changing bytes'), async () => {
-    // Prefix bytes participate in the bound: 15 bytes + 1 length byte is 16.
+  await check(label('varying output sizes preserve exact bytes'), async () => {
+    // Include length-prefix transitions and repeated large/small values.
     const sizes = [0, 1, 15, 16, 17, 127, 128, 255, 256, 257, 511, 512,
       513, 8193, 65537, 1048576, ...Array(20).fill(1), 65537, 0, 1048576,
       ...Array(20).fill(0)];
@@ -177,14 +177,13 @@ async function suite(pic, mode) {
       const value = blob(Buffer.alloc(size, 0x5a));
       await equalUpdate('emitBlob', nat(size), value);
     }
-    // Exercise schema-specific caches for records and vectors as well as Blob.
+    // Exercise records and vectors as well as Blob.
     for (const size of [1, 511, 65537, 1, 1, 1, 1025, 0]) {
       await equalUpdate('echoRecord', concat(nat(129), text('x'.repeat(size)), bytes(1)));
       await equalUpdate('echoArray', concat(nat(size), Buffer.alloc(size, 1)));
     }
   });
-  await check(label('query rollback and peer request/reply caches preserve exact bytes'), async () => {
-    // Queries execute the same Blob serializer but their global writes roll back.
+  await check(label('queries and peer requests/replies preserve exact bytes'), async () => {
     // Interleave large queries with small updates and then reverse the sizes.
     for (const size of [1, 65537, 1, 1048576, 1, 65537]) {
       const value = blob(Buffer.alloc(size, 0x5a));
@@ -195,7 +194,7 @@ async function suite(pic, mode) {
       assert.deepEqual(await query('queryBlob', blob(empty)), blob(empty));
     }
   });
-  await check(label('bounded semantic errors and oversize values leave caches usable'), async () => {
+  await check(label('semantic errors and oversize values allow subsequent valid calls'), async () => {
     // Array itself consumes one typed node, leaving 999999 null elements.
     await equalUpdate('emitNulls', nat(999999), nat(999999));
     for (let attempt = 0; attempt < 3; attempt++) {
@@ -217,7 +216,7 @@ async function suite(pic, mode) {
     });
     await equalUpdate('emitBlob', nat(1), blob(bytes(0x5a)));
   });
-  await check(label('invalid float after capacity growth and oversize outgoing calls reject safely'), async () => {
+  await check(label('invalid float after large Blob and oversize outgoing calls reject safely'), async () => {
     const finite = Buffer.alloc(8);
     finite.writeDoubleLE(1.5);
     for (const size of [65537, 131073, 1048576]) {
@@ -266,7 +265,7 @@ async function suite(pic, mode) {
       await assert.rejects(update('runMixed', principal(b)), /Candid.*forbidden/i);
     });
   }
-  await check(label('upgrade resets allocation hints without changing the wire contract'), async () => {
+  await check(label('upgrade preserves the wire contract'), async () => {
     await equalUpdate('emitBlob', nat(1048576), blob(Buffer.alloc(1048576, 0x5a)));
     await pic.upgradeCanister({canisterId: a, wasm, arg: init,
       upgradeModeOptions: {skip_pre_upgrade: [], wasm_memory_persistence: [{keep: null}]}});

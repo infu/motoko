@@ -39,17 +39,17 @@ syntax. Raw PocketIC calls bypass HTTP ingress inspection, so these tests do not
 claim to execute the inspection hook. Positive type checks cover aliases,
 declaration reordering, whole-method actor width and unchanged Candid variance.
 
-Adaptive bounded serializer checks alternate small and large Blob, record and
-vector values across allocation thresholds, repeated shrink opportunities,
-queries and peer calls. They verify exact bytes after repeated malformed-input,
-node-count and byte-limit failures. A valid 16 MiB encoding exceeds the IC's
+Serializer checks alternate small and large Blob, record and vector values
+across length-prefix and allocation boundaries, queries and peer calls. They
+verify exact bytes after repeated malformed-input, node-count and byte-limit
+failures. A valid 16 MiB encoding exceeds the IC's
 smaller response limit: that case must fail at the platform boundary, while an
 encoding over 16 MiB must fail in ICWire. Successful transferred values reach
 1 MiB; no test claims the platform can deliver a 16 MiB response.
-Invalid nonfinite floats occur after a growing Blob in the same result, and
+Invalid nonfinite floats occur after a large Blob in the same result, and
 oversized outgoing calls must fail before the receiving endpoint runs. A
-same-code upgrade resets allocation hints and repeats the wire checks without
-introducing any application migration.
+same-code upgrade repeats the wire checks without introducing any application
+migration.
 
 The same actor is compiled with `--trap-on-candid`. Its pure suite must pass,
 then an intentional Candid endpoint call must trap. This exercises the guard
@@ -58,5 +58,5 @@ callback and reply paths; checking whether payloads start with `DIDL` alone does
 not establish this property.
 
 Negative frontend fixtures are `test/fail/icwire-*.mo`. Run them using
-`test-runner -b test/fail -f icwire` from the compiler development environment,
+`test-runner -b test/fail/icwire-*.mo` from the compiler development environment,
 and regenerate their expectation files with `-a` after reviewing diagnostics.

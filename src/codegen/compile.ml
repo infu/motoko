@@ -10120,56 +10120,8 @@ module Wire = struct
     compute env id type_arguments [argument_type] [get_argument] ^^ set_result ^^
     unwrap env get_result
 
-  (* A transient capacity hint per concrete schema avoids a sizing traversal
-     on successful calls. A miss measures once and retries the bounded writer;
-     no exact-encoder fallback is used. The hint is a Wasm scalar global, not
-     persisted state or a wire descriptor. Query changes roll back normally. *)
   let encode_blob env ts =
-    let typ = Type.seq ts in
-    let schema = Typ_hash.typ_hash typ in
-    let max_bytes = 16_777_216L in
-    Func.share_code1 Func.Always env ("@icwire_api_bounded<" ^ schema ^ ">")
-      ("value", I64Type) [I64Type] (fun env value ->
-        let hint = E.get_global64_lazy env
-          ("@icwire_capacity<" ^ schema ^ ">") Mutable 256L in
-        let set_capacity, capacity = new_local env "wire_capacity" in
-        let set_result, result = new_local env "wire_bounded_result" in
-        let set_size, size = new_local env "wire_measured_size" in
-        let set_blob, blob = new_local env "wire_blob" in
-        let bounded () =
-          compute env "icwire_encode_bounded" [] [typ; Type.nat]
-            [value; capacity ^^ BigNum.from_word64 env] ^^ set_result in
-        let finish =
-          unwrap env result ^^ set_blob ^^
-          (* A rare large value must not retain a large capacity indefinitely.
-             Halving below one-quarter utilization adds hysteresis; a future
-             larger value can always grow again through the checked miss path. *)
-          blob ^^ Blob.len env ^^ capacity ^^ compile_shrU_const 2L ^^
-          compile_comparison I64Op.LtU ^^
-          E.if1 I64Type
-            (capacity ^^ compile_unboxed_const 16L ^^
-             compile_comparison I64Op.GtU ^^
-             E.if1 I64Type (capacity ^^ compile_shrU_const 1L) capacity)
-            capacity ^^
-          G.i (GlobalSet (nr hint)) ^^ blob in
-        G.i (GlobalGet (nr hint)) ^^ set_capacity ^^ bounded () ^^
-        result ^^ Variant.test_is env "ok" ^^
-        E.if1 I64Type finish
-          (compute env "icwire_estimate_size" [] [typ] [value] ^^
-           BigNum.to_word64 env ^^ set_size ^^
-           size ^^ compile_unboxed_const max_bytes ^^
-           compile_comparison I64Op.LeU ^^
-           size ^^ capacity ^^ compile_comparison I64Op.GtU ^^
-           G.i (Binary (Wasm_exts.Values.I64 I64Op.And)) ^^
-           E.if1 I64Type
-             (* Since size > capacity >= 16, this shift is in [5, 24]. *)
-             (compile_unboxed_one ^^ compile_unboxed_const 64L ^^
-              size ^^ compile_add_const (-1L) ^^
-              G.i (Unary (Wasm_exts.Values.I64 I64Op.Clz)) ^^
-              G.i (Binary (Wasm_exts.Values.I64 I64Op.Sub)) ^^
-              G.i (Binary (Wasm_exts.Values.I64 I64Op.Shl)) ^^
-              set_capacity ^^ bounded () ^^ finish)
-             (unwrap env result)))
+    plugin env "icwire_encode" [] (Type.seq ts)
 
   let serialize env wire ts = match wire with
     | Type.Candid -> Serialization.serialize env ts
