@@ -422,6 +422,8 @@ module E = struct
     rts : Wasm_exts.CustomModule.extended_module; (* The rts. Re-used when compiling actors *)
     trap_with : t -> string -> G.t;
       (* Trap with message; in the env for dependency injection *)
+    icwire_opt : Flags.icwire_opt;
+    icwire_endpoint_overrides : bool;
 
     (* Per module fields (only valid/used inside a module) *)
     (* Immutable *)
@@ -484,10 +486,13 @@ module E = struct
 
 
   (* The initial global environment *)
-  let mk_global mode rts trap_with enhanced_migration : t = {
+  let mk_global mode rts trap_with enhanced_migration
+      icwire_endpoint_overrides : t = {
     mode;
     rts;
     trap_with;
+    icwire_opt = !Flags.icwire_opt;
+    icwire_endpoint_overrides;
     imports = Imports.empty ();
     exports = ref Table.empty;
     func_ptrs = ref FunEnv.empty;
@@ -544,6 +549,24 @@ module E = struct
      bunch of accessors. *)
 
   let mode (env : t) = env.mode
+
+  let icwire_opt (env : t) = env.icwire_opt
+
+  let with_icwire_opt (env : t) icwire_opt = { env with icwire_opt }
+
+  let for_public_method (env : t) name typ =
+    let sort, _, _, _, _ = Type.as_func (Type.normalize typ) in
+    if Type.wire_of_sort sort <> Type.ICWire then env else
+    let override =
+      if env.icwire_endpoint_overrides then
+        Flags.M.find_opt name !Flags.icwire_opt_endpoints
+      else None in
+    let level = match override, sort with
+      | Some level, _ -> level
+      | None, Type.Shared (Type.ICWireQuery | Type.ICWireComposite) ->
+        Option.value !Flags.icwire_opt_query ~default:env.icwire_opt
+      | None, _ -> env.icwire_opt in
+    with_icwire_opt env level
 
   let add_anon_local (env : t) ty =
     let i = reg env.locals ty in
@@ -10182,6 +10205,15 @@ module ComputePlugins = struct
   end
 
   let compile env id ts arguments =
+    (* Forced level bindings bypass this selection. Only the ordinary codec
+       bindings inherit the immutable lexical compilation policy. *)
+    let id = match E.icwire_opt env, id with
+      | Flags.Compact,
+          ("icwire_encode" | "icwire_encode_bounded" | "icwire_decode"
+          | "icwire_decode_optional" | "icwire_encode_or_trap"
+          | "icwire_decode_or_trap" | "icwire_encode_bounded_or_trap"
+          | "icwire_estimate_size") -> id ^ "_compact"
+      | _ -> id in
     match Plugin_codegen.generator id with
     | None -> fatal "compute plugin generator is unavailable: %s" id
     | Some (owner, generator) ->
@@ -10244,6 +10276,10 @@ module Wire = struct
     if !Flags.icwire_internal then Type.ICWire else Type.Candid
 
   let name = function Type.Candid -> "candid" | Type.ICWire -> "icwire"
+
+  let cache_name env wire = match wire, E.icwire_opt env with
+    | Type.ICWire, Flags.Compact -> "icwire_compact"
+    | _ -> name wire
 
   let compute env id type_arguments argument_types arguments =
     let module C = Mo_values.Compute_plugin in
@@ -10519,7 +10555,7 @@ module FuncDec = struct
       match ts_opt with
       | Some ts ->
         (List.length ts,
-         "@callback_" ^ Wire.name wire ^ "<" ^
+         "@callback_" ^ Wire.cache_name env wire ^ "<" ^
            Typ_hash.typ_hash (Type.Tup ts) ^ ">",
          fun env -> Wire.deserialize env wire ts)
       | None ->
@@ -14141,12 +14177,15 @@ and compile_dec env pre_ae how v2en dec : VarEnv.t * G.t * (VarEnv.t -> scope_wr
   (* A special case for public methods *)
   (* This relies on the fact that in the top-level mutually recursive group, no shadowing happens. *)
   | LetD ({it = VarP v; _}, e) when E.NameEnv.mem v v2en ->
-    let (const, fill) = compile_const_exp env pre_ae e in
+    let exported_name = E.NameEnv.find v v2en in
+    let method_env = E.for_public_method env exported_name e.note.Note.typ in
+    let (const, fill) = compile_const_exp method_env pre_ae e in
     let fi = match const with
       | Const.Message fi -> fi
       | _ -> assert false in
-    let pre_ae1 = VarEnv.add_local_public_method pre_ae v (fi, (E.NameEnv.find v v2en)) e.note.Note.typ in
-    G.( pre_ae1, nop, (fun ae -> fill env ae; nop), unmodified)
+    let pre_ae1 = VarEnv.add_local_public_method pre_ae v
+      (fi, exported_name) e.note.Note.typ in
+    G.( pre_ae1, nop, (fun ae -> fill method_env ae; nop), unmodified)
 
   (* A special case for constant expressions *)
   | LetD (p, e) when e.note.Note.const ->
@@ -14389,6 +14428,9 @@ and compile_init_func mod_env ((cu, flavor) : Ir.prog) =
   match cu with
   | LibU _ -> fatal "compile_start_func: Cannot compile library"
   | ProgU ds ->
+    if mod_env.E.icwire_endpoint_overrides &&
+        not (Flags.M.is_empty !Flags.icwire_opt_endpoints) then
+      fatal "--icwire-opt-endpoint requires a main actor";
     Func.define_built_in mod_env "init" [] [] (fun env ->
       let ae, codeW = compile_decs env VarEnv.empty_ae ds Freevars.S.empty in
       (* Register the Blob deserialization dedup function *)
@@ -14424,6 +14466,15 @@ and export_actor_field env  ae (f : Ir.field) =
 
 (* Main actor *)
 and main_actor as_opt mod_env ds fs up =
+  if mod_env.E.icwire_endpoint_overrides then
+    Flags.M.iter (fun name _ ->
+      match List.find_opt (fun (f : Ir.field) -> f.it.name = name) fs with
+      | None -> fatal "unknown ICWire endpoint optimization selector %S" name
+      | Some f ->
+        let sort, _, _, _, _ = Type.as_func (Type.normalize f.note) in
+        if Type.wire_of_sort sort <> Type.ICWire then
+          fatal "ICWire optimization selector %S names a Candid endpoint" name
+    ) !Flags.icwire_opt_endpoints;
   let stable_actor_type = up.stable_type in
   let build_stable_actor = up.stable_record in
   IncrementalGraphStabilization.define_methods mod_env stable_actor_type;
@@ -14668,9 +14719,12 @@ and conclude_module env set_serialization_globals =
 
   ComputePlugins.link emodule (E.get_rts env)
 
-let compile mode ~(enhanced_migration:string option) rts (prog : Ir.prog) : Wasm_exts.CustomModule.extended_module =
+let compile mode ~icwire_endpoint_overrides
+    ~(enhanced_migration:string option) rts (prog : Ir.prog)
+    : Wasm_exts.CustomModule.extended_module =
   (* Enhanced orthogonal persistence requires a fixed layout. *)
-  let env = E.mk_global mode rts IC.trap_with enhanced_migration in
+  let env = E.mk_global mode rts IC.trap_with enhanced_migration
+    icwire_endpoint_overrides in
 
   IC.register_globals env;
   Stack.register_globals env;

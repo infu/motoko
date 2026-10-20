@@ -27,6 +27,33 @@ let compile_mode = ref ICMode
 (* Experimental ICWire actor transport, independent of ordinary shared calls. *)
 let icwire_internal = ref false
 let trap_on_candid = ref false
+
+(* Code generation policy only: levels have identical types and wire bytes. *)
+type icwire_opt = Compact | Speed
+
+let icwire_opt = ref Speed
+let icwire_opt_query : icwire_opt option ref = ref None
+let icwire_opt_endpoints : icwire_opt M.t ref = ref M.empty
+
+let icwire_opt_of_string = function
+  | "compact" -> Compact
+  | "speed" -> Speed
+  | value -> raise (Arg.Bad (Printf.sprintf
+      "invalid ICWire optimization level %S; expected compact or speed" value))
+
+let set_icwire_opt_endpoint value =
+  match String.rindex_opt value '=' with
+  | Some i when i > 0 ->
+    let name = String.sub value 0 i in
+    let level = String.sub value (i + 1) (String.length value - i - 1) in
+    let level = icwire_opt_of_string level in
+    if M.mem name !icwire_opt_endpoints then
+      raise (Arg.Bad (Printf.sprintf
+        "duplicate ICWire endpoint optimization selector %S" name));
+    icwire_opt_endpoints := M.add name level !icwire_opt_endpoints
+  | _ -> raise (Arg.Bad
+      "ICWire endpoint optimization requires NAME=compact or NAME=speed")
+
 let debug_info = ref false
 let await_lowering = ref true
 let async_lowering = ref true

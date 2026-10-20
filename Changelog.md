@@ -4,6 +4,12 @@
 
 * motoko (`moc`)
 
+  * Experimental Tripwire branch only: add ICWire `compact` and `speed`
+    code generation policies, with `speed` as the default. Select a global
+    policy with `--icwire-opt`, a query policy with `--icwire-opt-query`, or
+    individual public methods with repeatable `--icwire-opt-endpoint` selectors.
+    Explicit `ICWire.Compact` and `ICWire.Speed` codecs override the local
+    policy without changing wire bytes or function types (#6443).
   * Experimental branch only: name this compiler **Tripwire**, available as
     `bin/tripwire`, and add explicit `shared icwire` actor endpoints,
     exact-schema function types, exact-size encoding, mixed Candid/ICWire calls,

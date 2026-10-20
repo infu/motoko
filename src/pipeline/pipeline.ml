@@ -849,14 +849,17 @@ let rec compile_libs mode libs : Lowering.Desugar.import_declaration =
       go (imports @ new_imports) libs
   in go [] libs
 
-and compile_unit mode (enhanced_migration:string option) imports u : Wasm_exts.CustomModule.extended_module Diag.result =
+and compile_unit ?(icwire_endpoint_overrides = false) mode
+    (enhanced_migration:string option) imports u
+    : Wasm_exts.CustomModule.extended_module Diag.result =
   let open Diag.Syntax in
   let name = u.note.Syntax.filename in
   Cons.session ~scope:name (fun () ->
     let* prog_ir = desugar_unit imports u name in
     let prog_ir = ir_passes mode prog_ir name in
     phase "Compiling" name;
-    Diag.return (Codegen.Compile.compile mode ~enhanced_migration (load_as_rts ()) prog_ir))
+    Diag.return (Codegen.Compile.compile mode ~icwire_endpoint_overrides
+      ~enhanced_migration (load_as_rts ()) prog_ir))
 
 and compile_unit_to_wasm mode (enhanced_migration:string option) imports (u : Syntax.comp_unit) : string Diag.result =
   let open Diag.Syntax in
@@ -867,7 +870,8 @@ and compile_unit_to_wasm mode (enhanced_migration:string option) imports (u : Sy
 and compile_prog mode libs prog : Wasm_exts.CustomModule.extended_module Diag.result =
   let imports = compile_libs mode libs in
   let u = CompUnit.comp_unit_of_prog false prog in
-  compile_unit mode (!Flags.enhanced_migration) imports u
+  compile_unit ~icwire_endpoint_overrides:true mode
+    (!Flags.enhanced_migration) imports u
 
 let compile_file mode file : compile_result =
   let open Diag.Syntax in

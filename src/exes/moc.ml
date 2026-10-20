@@ -71,6 +71,15 @@ let argspec =
     " use ICWire for constructor arguments and compiler-private messages";
   "--trap-on-candid", Arg.Set Flags.trap_on_candid,
     " trap if application Candid serialization or deserialization executes";
+  "--icwire-opt",
+    Arg.String (fun s -> Flags.icwire_opt := Flags.icwire_opt_of_string s),
+    "<compact|speed>  set ICWire codec optimization (default: speed)";
+  "--icwire-opt-query",
+    Arg.String (fun s ->
+      Flags.icwire_opt_query := Some (Flags.icwire_opt_of_string s)),
+    "<compact|speed>  override ICWire query and composite-query codecs";
+  "--icwire-opt-endpoint", Arg.String Flags.set_icwire_opt_endpoint,
+    "<name=compact|speed>  override one public ICWire endpoint (repeatable)";
   "--plugin", Arg.String load_compute_plugin,
     "<directory|cmxs>  load a trusted native compute compiler plugin";
   "-c", Arg.Unit (set_mode Compile), " compile a program to WebAssembly";

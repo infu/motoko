@@ -96,13 +96,76 @@ and trailing bytes in its normal typed pass. An unsuccessful decode traps
 before the method body runs. An unsuccessful reply encode traps instead of
 publishing a partial reply.
 
-Automatic API encoding uses exact-size `ICWire.encode`, including outgoing
-arguments, successful replies, constructor arguments and compiler-private async
+By default, automatic API encoding uses exact-size `ICWire.encode`, including
+outgoing arguments, successful replies, constructor arguments and private async
 messages. The plugin measures the encoding, allocates its exact output size and
 writes the value. Automatic encoding has no adaptive capacity hints or capacity
 retries. Invalid values and values beyond the existing 16 MiB codec limit still
 trap. This limit does not override the IC's separate request and response size
 limits. Explicit `ICWire.encodeBounded` remains available to application code.
+
+## Codec optimization levels
+
+Tripwire offers two code generation policies for ICWire. `speed`, the default,
+retains the specialized visitors and exact-size output allocation described
+above. `compact` shares more visitor code and uses the streaming encoder to
+reduce generated Wasm. Compact encoding still returns exactly the encoded bytes;
+it does not choose a caller bound or add spare capacity to the wire payload.
+The policies have identical schemas, bytes, validation limits and error results.
+They differ in generated code and instruction costs. Their size and speed
+tradeoff depends on the concrete types and operations.
+
+Select the global policy, then override queries or individual hot endpoints:
+
+```sh
+bin/tripwire --plugin ../plugins/dist/icwire --icwire-internal \
+  --icwire-opt compact \
+  --icwire-opt-query compact \
+  --icwire-opt-endpoint reactor_receive=speed \
+  --icwire-opt-endpoint submit=speed \
+  example.mo -o example.wasm
+```
+
+`--icwire-opt-query` covers public ICWire queries and composite queries.
+An explicit endpoint override takes precedence over the query policy, which
+takes precedence over the global policy. Flag order does not change precedence.
+Each endpoint selector names an exact public ICWire method export in the main
+compilation target. Unknown names, Candid methods and repeated selectors are
+errors. Imported actor classes use the global and query policies; selectors for
+the main actor do not apply to their methods.
+
+An endpoint's policy covers its argument decoder, reply encoder and ICWire
+operations compiled in its body, including nested asynchronous continuations,
+outgoing arguments and reply callbacks. This is a lexical compilation choice.
+A helper defined outside the endpoint uses the global policy; calling it from
+a hot endpoint does not compile a second specialization of it. Constructors,
+system hooks, the shared async dispatch endpoint and `inspect` argument readers
+also use the global policy. In particular, a method override does not change the
+separate reader supplied to `inspect`. Ordinary application field accesses and
+Candid serialization are unaffected by these codec policies.
+
+For individual internal codecs, explicitly select the policy at the call site:
+
+```motoko
+import ICWire "mo:fast/ICWire";
+
+let saved = ICWire.Compact.encodeOrTrap(request);
+let hot = ICWire.Speed.decodeOrTrap<Request>(saved);
+```
+
+Both namespaces expose `encode`, `encodeBounded`, `decode`, `decodeOptional`,
+`encodeOrTrap`, `decodeOrTrap`, `encodeBoundedOrTrap` and `estimateSize`.
+These aliases select code generation at compilation; no policy value, descriptor
+or dispatch branch is included in a message or evaluated at runtime. Ordinary
+`ICWire` operations follow the compilation scope's policy. Explicit namespace
+selection takes precedence over that policy, including inside shared local
+helpers. Codec aliases retain their selection when passed through ordinary
+Motoko bindings.
+
+Optimization policy is absent from actor and function types. A compact client
+can call a speed endpoint and a speed client can call a compact endpoint with
+the same exact schema. These flags do not change protocol selection or relax
+ICWire's schema invariance.
 
 ## Candid and discovery
 
