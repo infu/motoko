@@ -150,6 +150,55 @@ async function suite(pic, mode) {
     await equalUpdate('many', pair);
     await equalUpdate('tuple', pair);
   });
+  await check(label('explicit and actor codecs share nested result schemas'), async () => {
+    // #ok precedes #err by unsigned label hash. The nested #err is its
+    // schema's only arm, so both variant ordinals are zero.
+    await equalUpdate('echoNestedResult', concat(bytes(0, 0), nat(12345)));
+    await equalUpdate('echoNestedResult', concat(bytes(1), text('handled')));
+    await assert.rejects(update('echoNestedResult', bytes(0, 1)), /ICWire|icwire/i);
+    await equalUpdate('echoNestedResult', concat(bytes(0, 0), nat(7)));
+    await assert.rejects(update('emitFloat32Tail', bytes(0)), /ICWire|icwire/i);
+    const finite = Buffer.alloc(4);
+    finite.writeFloatLE(1.5);
+    await equalUpdate('emitFloat32Tail', bytes(1),
+      concat(blob(Buffer.alloc(128, 0x5a)), finite));
+  });
+  await check(label('direct codecs preserve bytes and exact diagnostic traps'), async () => {
+    const finite = Buffer.alloc(8);
+    finite.writeDoubleLE(1.5);
+    const payload = Buffer.alloc(1022, 0x5a);
+    const encoded = concat(blob(payload), finite);
+    for (const mode of [0, 1, 2, 3]) {
+      const encode = (valid, capacity = 2048) =>
+        concat(nat(mode), nat(payload.length), bytes(Number(valid)), nat(capacity));
+      await assert.rejects(update('codecEncode', encode(false)),
+        /ICWire float at byte 1_024/);
+      await equalUpdate('codecEncode', encode(true), blob(encoded));
+      if (mode < 2) {
+        await assert.rejects(update('codecEncode', encode(false, 3)),
+          /ICWire limit at byte 0/);
+        await assert.rejects(update('codecEncode', encode(true, 16 * 1024 * 1024 + 1)),
+          /ICWire limit at byte 0/);
+        await equalUpdate('codecEncode', encode(true), blob(encoded));
+      }
+    }
+    const finite32 = Buffer.alloc(4);
+    finite32.writeFloatLE(1.5);
+    for (const direct of [0, 1]) {
+      await assert.rejects(update('codecEncode32', bytes(direct, 0)),
+        /ICWire float at byte 1_024/);
+      await equalUpdate('codecEncode32', bytes(direct, 1),
+        blob(concat(blob(payload), finite32)));
+      await assert.rejects(update('codecDecode',
+        concat(bytes(direct), blob(concat(blob(payload), bytes(2))))),
+        /ICWire bool at byte 1_024/);
+      await assert.rejects(update('codecDecode',
+        concat(bytes(direct), blob(concat(blob(payload), bytes(1, 0))))),
+        /ICWire trailing at byte 1_025/);
+      await equalUpdate('codecDecode',
+        concat(bytes(direct), blob(concat(blob(payload), bytes(1)))), nat(1022));
+    }
+  });
   await check(label('query, composite query and cross-canister async'), async () => {
     assert.deepEqual(await query('queryNat', nat(777)), nat(777));
     assert.deepEqual(await query('compositeQuery', concat(principal(b), nat(999))), nat(999));

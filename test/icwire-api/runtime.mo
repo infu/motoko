@@ -7,6 +7,7 @@ actor class Api(seed : Nat, expectedCaller : Principal) = this {
   type Pair = (Nat, Text);
   type Choice = { #a; #b : Nat };
   type Record = { a : Nat; b : Text; c : Bool };
+  type NestedResult = { #ok : { #err : Nat }; #err : Text };
   type NatCall = shared icwire Nat -> async Nat;
   type NatQuery = shared icwire query Nat -> async Nat;
   type View = actor { queryNat : NatQuery };
@@ -40,6 +41,19 @@ actor class Api(seed : Nat, expectedCaller : Principal) = this {
   public shared icwire func echoArray(v : [Nat]) : async [Nat] { v };
   public shared icwire func echoText(v : Text) : async Text { v };
   public shared icwire func echoBlob(v : Blob) : async Blob { v };
+  public shared icwire func echoNestedResult(v : NestedResult) : async NestedResult {
+    let encoded = switch (Prim.to_icwire(v)) {
+      case (#ok bytes) bytes;
+      case (#err _) Prim.trap("explicit ICWire encoding failed");
+    };
+    assert Prim.to_icwire_or_trap(v) == encoded;
+    assert Prim.to_icwire_bounded_or_trap(v, 128) == encoded;
+    assert Prim.from_icwire_or_trap<NestedResult>(encoded) == v;
+    switch (Prim.from_icwire<NestedResult>(encoded)) {
+      case (#ok value) { assert value == v; value };
+      case (#err _) Prim.trap("explicit ICWire decoding failed");
+    }
+  };
   public shared icwire query func queryBlob(v : Blob) : async Blob { v };
 
   func filledBlob(size : Nat) : Blob {
@@ -66,6 +80,36 @@ actor class Api(seed : Nat, expectedCaller : Principal) = this {
   };
   public shared icwire func emitFloatTail(size : Nat, valid : Bool) : async (Blob, Float) {
     (filledBlob(size), if (valid) 1.5 else 0.0 / 0.0)
+  };
+  public shared icwire func emitFloat32Tail(valid : Bool) : async (Blob, Float32) {
+    (filledBlob(128), Prim.floatToFloat32(if (valid) 1.5 else 0.0 / 0.0))
+  };
+  func codecError<T>(result : {#ok : T; #err : {kind : Text; offset : Nat64}}) : T {
+    switch result {
+      case (#ok value) value;
+      case (#err error) Prim.trap("ICWire " # error.kind # " at byte " # debug_show error.offset);
+    }
+  };
+  public shared icwire func codecEncode(
+    mode : Nat, size : Nat, valid : Bool, capacity : Nat
+  ) : async Blob {
+    let value = (filledBlob(size), if (valid) 1.5 else 0.0 / 0.0);
+    switch mode {
+      case (0) codecError(Prim.to_icwire_bounded(value, capacity));
+      case (1) Prim.to_icwire_bounded_or_trap(value, capacity);
+      case (2) codecError(Prim.to_icwire(value));
+      case (_) Prim.to_icwire_or_trap(value);
+    }
+  };
+  public shared icwire func codecEncode32(direct : Bool, valid : Bool) : async Blob {
+    let value = (filledBlob(1022), Prim.floatToFloat32(if (valid) 1.5 else 0.0 / 0.0));
+    if (direct) Prim.to_icwire_or_trap(value)
+    else codecError(Prim.to_icwire(value))
+  };
+  public shared icwire func codecDecode(direct : Bool, input : Blob) : async Nat {
+    let value = if (direct) Prim.from_icwire_or_trap<(Blob, Bool)>(input)
+      else codecError(Prim.from_icwire<(Blob, Bool)>(input));
+    value.0.size()
   };
   public shared icwire func acceptBlob(value : Blob) : async Nat {
     blobRequests += 1;
